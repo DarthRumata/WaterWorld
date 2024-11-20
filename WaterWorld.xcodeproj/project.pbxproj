@@ -18,8 +18,11 @@
 				Assets.xcassets,
 				GameScene.sks,
 				GameScene.swift,
+				Models/GameState.swift,
 				Organism.swift,
+				OrganismModel.swift,
 				UIPanel.swift,
+				WaterContainer.swift,
 			);
 			target = 120130962CE30F86003DC54C /* WaterWorld macOS */;
 		};
@@ -174,7 +177,7 @@
 				PRODUCT_NAME = WaterWorld;
 				SDKROOT = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
 		};
@@ -203,7 +206,7 @@
 				PRODUCT_NAME = WaterWorld;
 				SDKROOT = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};

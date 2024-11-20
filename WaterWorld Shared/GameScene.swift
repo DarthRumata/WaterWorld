@@ -10,7 +10,8 @@ import SpriteKit
 
 private enum Constants {
     static let maxLightLevel: CGFloat = 10
-    static let dayDuration: TimeInterval = 20.0 // Total duration of one day cycle in seconds
+    static let dayDuration: TimeInterval = 24.0 // Total duration of one day cycle in seconds
+    static let initialPopulation = 100
 }
 
 class GameScene: SKScene {
@@ -20,15 +21,17 @@ class GameScene: SKScene {
     @Published var simulationSpeed: TimeInterval = 1.0 // Default speed
     @Published var totalTime: TimeInterval = 0.0 // Keeps track of elapsed time
     @Published var lastUpdateTime: TimeInterval?
-    @Published var lastTimeInDay: TimeInterval = 0.0
+    @Published var gameState: GameState = .stopped
     
     // UI
     private var uiPanel: UIPanel?
+    private var container: WaterContainer!
     
     // Combine
     private var cancellables = Set<AnyCancellable>()
     
     @Published private var organisms = [Organism]()
+    private var organismModels = [OrganismModel]()
 
     class func newGameScene() -> GameScene {
         // Load 'GameScene.sks' as an SKScene.
@@ -38,7 +41,7 @@ class GameScene: SKScene {
         }
         
         // Set the scale mode to scale to fit the window
-        scene.scaleMode = .resizeFill
+        scene.scaleMode = .aspectFit
         
         return scene
     }
@@ -55,8 +58,12 @@ class GameScene: SKScene {
     override func update(_ currentTime: TimeInterval) {
         // Calculate delta time
         let deltaTime = currentTime - (lastUpdateTime ?? currentTime)
+        print(deltaTime)
         lastUpdateTime = currentTime
         
+        guard gameState == .active else {
+            return
+        }
         // Update total time considering simulation speed
         totalTime += deltaTime * TimeInterval(simulationSpeed)
         
@@ -65,19 +72,20 @@ class GameScene: SKScene {
         
         // Update light level (0 to 10 and back to 0)
         let progress = CGFloat(timeInDay / Constants.dayDuration)
-        if progress <= 0.5 {
+        if progress <= 0.25 {
             // Morning to noon (lightLevel increases from 0 to 10)
-            lightLevel = Constants.maxLightLevel * (progress * 2)
-        } else {
+            lightLevel = Constants.maxLightLevel * (progress * 4)
+        } else if progress <= 0.5 {
             // Noon to night (lightLevel decreases from 10 to 0)
-            lightLevel = Constants.maxLightLevel * (1 - ((progress - 0.5) * 2))
+            lightLevel = Constants.maxLightLevel * (1 - ((progress - 0.25) * 4))
+        } else {
+            lightLevel = 0
         }
         
-        // Check if a new day has started
-        if timeInDay < lastTimeInDay {
-            dayCount += 1
-        }
-        lastTimeInDay = timeInDay
+        speed = simulationSpeed
+        dayCount = Int(totalTime) / Int(Constants.dayDuration)
+        
+        notifyOrganisms()
     }
     
     override func didChangeSize(_ oldSize: CGSize) {
@@ -87,17 +95,30 @@ class GameScene: SKScene {
         
         // Update positions of UI elements if necessary
         uiPanel?.update(withSceneSize: size)
+        container?.update(sceneSize: size)
     }
     
     // Create UI
     
-    func setUpScene() {
-        backgroundColor = SKColor.cyan
+    private func setUpScene() {
+        backgroundColor = SKColor.white
         
         // Create UI
         addUIPanel()
-       
-        addOrganisms()
+        addContainer()
+        
+        $lightLevel
+            .map { lightLevel in
+                if lightLevel == 0 {
+                    return SKColor(white: 0, alpha: 1)
+                }
+                let brightness = 0.1 + (lightLevel / Constants.maxLightLevel) * 0.9 // Brightness from 0.2 to 1.0
+                let color = SKColor(hue: 0.1667, saturation: 1, brightness: brightness, alpha: 1.0)
+                
+                return color
+            }
+            .assign(to: \.backgroundColor, on: self)
+            .store(in: &cancellables)
     }
     
     private func addUIPanel() {
@@ -106,6 +127,7 @@ class GameScene: SKScene {
             organismsCount: $organisms.map { $0.count }.eraseToAnyPublisher(),
             speed: $simulationSpeed.eraseToAnyPublisher(),
             lightLevel: $lightLevel.eraseToAnyPublisher(),
+            gameState: $gameState.eraseToAnyPublisher(),
             onTapRestartButton: { [weak self] in
                 self?.restartSimulation()
             },
@@ -120,6 +142,13 @@ class GameScene: SKScene {
                 
                 let newSpeed = self.simulationSpeed - 1
                 self.simulationSpeed = max(newSpeed, 0)
+            },
+            onTapPause: { [weak self] in
+                guard let self, self.gameState != .stopped else {
+                    return
+                }
+                
+                self.gameState = self.gameState == .active ? .paused : .active
             }
         )
         
@@ -128,62 +157,90 @@ class GameScene: SKScene {
         self.uiPanel = uiPanel
     }
     
+    private func addContainer() {
+        container = WaterContainer(
+            color: NSColor(red: 116.0 / 255, green: 204.0 / 255, blue: 244.0 / 255, alpha: 0.7),
+            size: CGSize(width: size.width, height: size.height - 200)
+        )
+        container.anchorPoint = CGPoint(x: 0, y: 0)
+        container.position = .zero
+        addChild(container)
+    }
+    
     private func addOrganisms() {
-        for _ in 0 ..< 10 {
-            let xPosition = CGFloat.random(in: 0...size.width)
-            let yPosition = CGFloat.random(in: size.height * 0.2...size.height * 0.8)
+        for i in 0 ..< Constants.initialPopulation {
+            let xPosition = CGFloat.random(in: 10...container.size.width - 10)
+            let yPosition = CGFloat.random(in: 10...container.size.height - 10)
             let position = CGPoint(x: xPosition, y: yPosition)
             
             print("pos: \(position)")
 
-            let randomColor = SKColor(hue: CGFloat.random(in: 0...1),
-                                      saturation: 0.8,
-                                      brightness: 0.9,
-                                      alpha: 1.0)
-            let sizeVariation = CGFloat.random(in: 0.8...1.2) * 20.0
+            let baseColor = SKColor.green
+            let model = OrganismModel()
 
-            let organism = Organism(position: position, color: randomColor, radius: sizeVariation)
+            let organism = Organism(model: model, position: position, color: baseColor, radius: 10) {
+                print("Organism index: \(i)")
+                $0.moveDown()
+            }
             organisms.append(organism)
-            addChild(organism)
-           // organism.startMovement()
+            organismModels.append(model)
+            container.addChild(organism)
         }
-    }
-    
-    // Update UI
-    func updateBackgroundColor() {
-        // Calculate color based on light level
-        let brightness = 0.2 + (lightLevel / Constants.maxLightLevel) * 0.8 // Brightness from 0.2 to 1.0
-        let color = SKColor(hue: 0.6, saturation: 0.5, brightness: brightness, alpha: 1.0)
-        
-        backgroundColor = color
     }
     
     // Control state
-    func restartSimulation() {
+    private func restartSimulation() {
         // Reset variables
         totalTime = 0.0
         dayCount = 0
-        lastTimeInDay = 0.0
         lightLevel = 0
         
         // Remove existing organisms
-        for node in children {
-            if node is Organism {
-                node.removeFromParent()
-            }
+        for organism in organisms {
+            organism.removeFromParent()
         }
+        organismModels.removeAll()
+        organisms.removeAll()
         
         // Add new organisms
         addOrganisms()
+        
+        gameState = .active
+    }
+    
+    // State updates
+    
+    private func notifyOrganisms() {
+        for (model, view) in zip(organismModels, organisms) {
+            Task {
+                let depth = normalizedDepth(for: view)
+                let lightLevel = lightLevel(atDepth: depth)
+                let input = SensorInput(lightLevel: lightLevel, depth: depth, totalTimeElapsed: totalTime)
+                await model.handleChanges(input)
+            }
+        }
+    }
+    
+    // Normalized from 0 to 100
+    private func normalizedDepth(for organism: Organism) -> CGFloat {
+        let maxDepth = container.size.height
+        let currentDepth = maxDepth - organism.position.y
+        return currentDepth / maxDepth * 100
+    }
+    
+    // ln(depthLightLevel / surfaceLightLevel) / depth
+    private let lightDecayRate = -0.0693147180559945
+    
+    // Inverse square law
+    private func lightLevel(atDepth depth: CGFloat) -> CGFloat {
+        return lightLevel * exp(depth * lightDecayRate)
     }
 }
 
 #if os(OSX)
 // Mouse-based event handling
 extension GameScene {
-    override func mouseDown(with event: NSEvent) {
-       
-    }
+    override func mouseDown(with event: NSEvent) {}
     
     override func mouseDragged(with event: NSEvent) {}
     

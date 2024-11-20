@@ -8,9 +8,13 @@
 import Combine
 import SpriteKit
 
+private enum Constants {
+    static let panelHeight: CGFloat = 200
+    static let backgroundColor = SKColor(white: 0.9, alpha: 0.7)
+    static let textColor = SKColor(white: 0.1, alpha: 1)
+}
+
 class UIPanel: SKNode {
-    private let panelHeight: CGFloat = 200
-    
     private var border: SKShapeNode
     
     // Indicators
@@ -23,11 +27,13 @@ class UIPanel: SKNode {
     private var speedLabel: SKLabelNode!
     private var increaseSpeedButton: SKLabelNode!
     private var decreaseSpeedButton: SKLabelNode!
+    private var pauseButton: SKLabelNode!
     
     // Actions
     let onTapRestartButton: () -> Void
     let onTapIncreaseSpeed: () -> Void
     let onTapDecreaseSpeed: () -> Void
+    let onTapPause: () -> Void
     
     // Combine
     private var cancellables = Set<AnyCancellable>()
@@ -37,20 +43,23 @@ class UIPanel: SKNode {
         organismsCount: AnyPublisher<Int, Never>,
         speed: AnyPublisher<TimeInterval, Never>,
         lightLevel: AnyPublisher<CGFloat, Never>,
+        gameState: AnyPublisher<GameState, Never>,
         onTapRestartButton: @escaping () -> Void,
         onTapIncreaseSpeed: @escaping () -> Void,
-        onTapDecreaseSpeed: @escaping () -> Void
+        onTapDecreaseSpeed: @escaping () -> Void,
+        onTapPause: @escaping () -> Void
     ) {
         let border = SKShapeNode()
         border.position = CGPoint(x: 0, y: 0)
-        border.fillColor = .clear
-        border.strokeColor = .red
-        border.lineWidth = 2
+        border.fillColor = Constants.backgroundColor
+        border.strokeColor = .white
+        border.lineWidth = 3
         
         self.border = border
         self.onTapRestartButton = onTapRestartButton
         self.onTapIncreaseSpeed = onTapIncreaseSpeed
         self.onTapDecreaseSpeed = onTapDecreaseSpeed
+        self.onTapPause = onTapPause
         
         super.init()
         
@@ -62,6 +71,7 @@ class UIPanel: SKNode {
         addLightLevelLabel()
         addRestartLabel()
         addSpeedLabel()
+        addPauseButton()
         
         organismsCount
             .map {
@@ -86,9 +96,16 @@ class UIPanel: SKNode {
         
         lightLevel
             .map {
-                "Light Level: \($0)"
+                "Light Level: \(String(format: "%.2f", $0))"
             }
             .assign(to: \.text, on: lightLevelLabel)
+            .store(in: &cancellables)
+        
+        gameState
+            .sink { [pauseButton] state in
+                pauseButton?.fontColor = state == .stopped ? .gray : Constants.textColor
+                pauseButton?.text = state == .active ? "Pause" : "Resume"
+            }
             .store(in: &cancellables)
     }
     
@@ -98,13 +115,16 @@ class UIPanel: SKNode {
     }
     
     func update(withSceneSize size: CGSize) {
-        position = CGPoint(x: 0, y: size.height - panelHeight)
-        border.path = CGPath(rect: CGRect(x: 0, y: 0, width: size.width, height: panelHeight), transform: nil)
-        lightLevelLabel.position = CGPoint(x: size.width / 2 , y: panelHeight - 40)
-        restartButton.position = CGPoint(x: size.width - 150, y: panelHeight - 90)
-        speedLabel.position = CGPoint(x: size.width - 150, y: panelHeight - 40)
-        increaseSpeedButton.position = CGPoint(x: speedLabel.position.x + 70, y: panelHeight - 40)
-        decreaseSpeedButton.position = CGPoint(x: speedLabel.position.x - 70, y: panelHeight - 40)
+        position = CGPoint(x: 0, y: size.height - Constants.panelHeight)
+        border.path = CGPath(rect: CGRect(x: 0, y: 0, width: size.width, height: Constants.panelHeight), transform: nil)
+        dayCountLabel.position = CGPoint(x: 10 , y: Constants.panelHeight - 40)
+        organismCountLabel.position = CGPoint(x: 10 , y: Constants.panelHeight - 90)
+        lightLevelLabel.position = CGPoint(x: size.width / 2 , y: Constants.panelHeight - 40)
+        restartButton.position = CGPoint(x: size.width - 150, y: Constants.panelHeight - 90)
+        speedLabel.position = CGPoint(x: size.width - 150, y: Constants.panelHeight - 40)
+        increaseSpeedButton.position = CGPoint(x: speedLabel.position.x + 70, y: Constants.panelHeight - 40)
+        decreaseSpeedButton.position = CGPoint(x: speedLabel.position.x - 70, y: Constants.panelHeight - 40)
+        pauseButton.position = CGPoint(x: speedLabel.position.x, y: Constants.panelHeight - 140)
     }
     
     // Left
@@ -112,10 +132,9 @@ class UIPanel: SKNode {
     private func addDayCountLabel() {
         dayCountLabel = SKLabelNode(fontNamed: "Helvetica")
         dayCountLabel.fontSize = 18
-        dayCountLabel.fontColor = .white
+        dayCountLabel.fontColor = Constants.textColor
         dayCountLabel.horizontalAlignmentMode = .left
         dayCountLabel.verticalAlignmentMode = .bottom
-        dayCountLabel.position = CGPoint(x: 20, y: panelHeight - 40)
         dayCountLabel.zPosition = 100
         addChild(dayCountLabel)
     }
@@ -125,8 +144,7 @@ class UIPanel: SKNode {
         organismCountLabel.fontSize = 18
         organismCountLabel.horizontalAlignmentMode = .left
         organismCountLabel.verticalAlignmentMode = .bottom
-        organismCountLabel.fontColor = .white
-        organismCountLabel.position = CGPoint(x: 20, y: panelHeight - 90)
+        organismCountLabel.fontColor = Constants.textColor
         organismCountLabel.zPosition = 100
         organismCountLabel.text = "Organisms"
         addChild(organismCountLabel)
@@ -137,8 +155,7 @@ class UIPanel: SKNode {
     private func addLightLevelLabel() {
         lightLevelLabel = SKLabelNode(fontNamed: "Helvetica")
         lightLevelLabel.fontSize = 18
-        lightLevelLabel.fontColor = .white
-        lightLevelLabel.position = CGPoint(x: 400, y: panelHeight - 20)
+        lightLevelLabel.fontColor = Constants.textColor
         lightLevelLabel.zPosition = 100
         addChild(lightLevelLabel)
     }
@@ -148,8 +165,8 @@ class UIPanel: SKNode {
     private func addRestartLabel() {
         restartButton = SKLabelNode(fontNamed: "Helvetica")
         restartButton.fontSize = 18
-        restartButton.fontColor = .yellow
-        restartButton.position = CGPoint(x: 1000, y: panelHeight - 20)
+        restartButton.fontColor = Constants.textColor
+        restartButton.position = CGPoint(x: 1000, y: Constants.panelHeight - 20)
         restartButton.zPosition = 100
         restartButton.text = "Restart"
         addChild(restartButton)
@@ -158,26 +175,32 @@ class UIPanel: SKNode {
     private func addSpeedLabel() {
         speedLabel = SKLabelNode(fontNamed: "Helvetica")
         speedLabel.fontSize = 18
-        speedLabel.fontColor = .yellow
-        speedLabel.position = CGPoint(x: 1100, y: panelHeight - 50)
+        speedLabel.fontColor = Constants.textColor
         speedLabel.zPosition = 100
         addChild(speedLabel)
         
         increaseSpeedButton = SKLabelNode(fontNamed: "Helvetica")
         increaseSpeedButton.fontSize = 18
-        increaseSpeedButton.fontColor = .yellow
-        increaseSpeedButton.position = CGPoint(x: 1200, y: panelHeight - 50)
+        increaseSpeedButton.fontColor = Constants.textColor
         increaseSpeedButton.zPosition = 100
         increaseSpeedButton.text = "=>"
         addChild(increaseSpeedButton)
         
         decreaseSpeedButton = SKLabelNode(fontNamed: "Helvetica")
         decreaseSpeedButton.fontSize = 18
-        decreaseSpeedButton.fontColor = .yellow
-        decreaseSpeedButton.position = CGPoint(x: 1000, y: panelHeight - 50)
+        decreaseSpeedButton.fontColor = Constants.textColor
         decreaseSpeedButton.zPosition = 100
         decreaseSpeedButton.text = "<="
         addChild(decreaseSpeedButton)
+    }
+    
+    private func addPauseButton() {
+        pauseButton = SKLabelNode(fontNamed: "Helvetica")
+        pauseButton.fontSize = 18
+        pauseButton.fontColor = Constants.textColor
+        pauseButton.zPosition = 100
+        pauseButton.text = "Pause"
+        addChild(pauseButton)
     }
     
     override func mouseDown(with event: NSEvent) {
@@ -190,6 +213,8 @@ class UIPanel: SKNode {
             onTapIncreaseSpeed()
         } else if nodesAtPoint.contains(decreaseSpeedButton) {
             onTapDecreaseSpeed()
+        } else if nodesAtPoint.contains(pauseButton) {
+            onTapPause()
         }
     }
 }
