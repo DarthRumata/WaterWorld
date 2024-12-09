@@ -54,8 +54,8 @@ class GameScene: SKScene {
         
         setUpScene()
         
-        //print("Scene size: \(size)")
-        //print("View size: \(view.bounds.size)")
+        // print("Scene size: \(size)")
+        // print("View size: \(view.bounds.size)")
     }
     
     override func update(_ currentTime: TimeInterval) {
@@ -179,17 +179,21 @@ class GameScene: SKScene {
             print("pos: \(position)")
 
             let baseColor = SKColor.green
-            
-            let model = OrganismModel(brain: RandomBrain()) { [weak self] id in
+            let logger: Logger = i == 0 ? ConsoleLogger() : EmptyLogger()
+            let model = OrganismModel(brain: RandomBrain(), logger: logger) { [weak self] id in
                 self?.organismModels.removeValue(forKey: id)
                 let organism = self?.organisms[id]
                 organism?.removeFromParent()
                 self?.organisms.removeValue(forKey: id)
             }
 
-            let organism = Organism(model: model, position: position, color: baseColor, radius: 10) {
+            let organism = Organism(
+                model: model,
+                position: position,
+                color: baseColor,
+                radius: 10
+            ) { _ in
                 print("Organism index: \(i)")
-                $0.moveDown()
             }
             organisms[model.id] = organism
             organismModels[model.id] = model
@@ -205,7 +209,7 @@ class GameScene: SKScene {
         lightLevel = 0
         
         // Remove existing organisms
-        organisms.forEach { (_, organism) in
+        for (_, organism) in organisms {
             organism.removeFromParent()
         }
         organismModels.removeAll()

@@ -29,6 +29,9 @@
 				Organism.swift,
 				OrganismModel.swift,
 				UIPanel.swift,
+				Utils/ConsoleLogger.swift,
+				Utils/EmptyLogger.swift,
+				Utils/Logger.swift,
 				WaterContainer.swift,
 			);
 			target = 120130962CE30F86003DC54C /* WaterWorld macOS */;

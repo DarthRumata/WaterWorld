@@ -8,6 +8,10 @@
 import Combine
 import Foundation
 
+private enum Constants {
+    static let maxEnergy: Int = 200
+}
+
 actor OrganismModel: Equatable {
     enum Action: Sendable {
         case moveUp
@@ -37,7 +41,7 @@ actor OrganismModel: Equatable {
     
     // Private State
     
-    @Published private var energy = 100
+    @Published private var energy = Constants.maxEnergy
     private var isBusy = false
     
     private var isDead: Bool {
@@ -55,9 +59,11 @@ actor OrganismModel: Equatable {
     // Dependencies
     
     private let brain: BrainProtocol
+    private let logger: Logger
     
-    init(brain: BrainProtocol, onDeath: @escaping @MainActor @Sendable (UUID) -> Void) {
+    init(brain: BrainProtocol, logger: Logger, onDeath: @escaping @MainActor @Sendable (UUID) -> Void) {
         self.brain = brain
+        self.logger = logger
         self.onDeath = onDeath
         
         Task {
@@ -100,6 +106,8 @@ actor OrganismModel: Equatable {
         
         gainEnergy(fromLightLevel: input.lightLevel)
         spentEnergy(by: action)
+        
+        await logger.log(message: "action: \(action), energy: \(energy)")
     }
     
     private func spentEnergy(by action: Action) {
@@ -113,16 +121,29 @@ actor OrganismModel: Equatable {
     private func gainEnergy(fromLightLevel lightLevel: CGFloat) {
         let gain: Int
         switch lightLevel {
-        case 7...10:
-            gain = 5
+        case 7 ... 10:
+            gain = 14
         case 5..<7:
-            gain = 3
+            gain = 9
         case 2..<5:
-            gain = 2
+            gain = 5
         default:
             gain = 0
         }
         
-        energy += gain
+        energy = min(gain + energy, Constants.maxEnergy)
+    }
+}
+
+extension OrganismModel.Action: CustomDebugStringConvertible {
+    var debugDescription: String {
+        switch self {
+        case .moveUp:
+            "moveUp"
+        case .moveDown:
+            "moveDown"
+        case .wait:
+            "wait"
+        }
     }
 }
