@@ -96,7 +96,10 @@ class Organism: SKNode {
 
     func moveDown() {
         Task {
-            await move(by: CGPoint(x: model.direction.rawValue * Constants.movementPace, y: -Constants.movementPace))
+            await move(by: CGPoint(
+                x: model.direction.rawValue * Constants.movementPace,
+                y: -Constants.movementPace
+            ))
         }
     }
 
@@ -108,6 +111,8 @@ class Organism: SKNode {
                     moveUp()
                 case .moveDown:
                     moveDown()
+                case .wait:
+                    await wait()
                 }
             }
         }
@@ -136,10 +141,14 @@ class Organism: SKNode {
         newPosition.y = max(minY, min(newPosition.y, maxY))
 
         if position != newPosition {
-            await model.setIsMoving(true)
             let moveDown = SKAction.move(to: newPosition, duration: Constants.movementDuration)
             await run(moveDown)
-            await model.setIsMoving(false)
+            await model.setIsBusy(false)
         }
+    }
+    
+    private func wait() async {
+        try? await Task.sleep(for: .seconds(Constants.movementDuration / speed))
+        await model.setIsBusy(false)
     }
 }

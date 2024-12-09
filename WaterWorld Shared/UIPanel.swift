@@ -21,6 +21,7 @@ class UIPanel: SKNode {
     private var lightLevelLabel: SKLabelNode!
     private var dayCountLabel: SKLabelNode!
     private var organismCountLabel: SKLabelNode!
+    private var timeLabel: SKLabelNode!
     
     // Controls
     private var restartButton: SKLabelNode!
@@ -43,6 +44,7 @@ class UIPanel: SKNode {
         organismsCount: AnyPublisher<Int, Never>,
         speed: AnyPublisher<TimeInterval, Never>,
         lightLevel: AnyPublisher<CGFloat, Never>,
+        dayProgress: AnyPublisher<CGFloat, Never>,
         gameState: AnyPublisher<GameState, Never>,
         onTapRestartButton: @escaping () -> Void,
         onTapIncreaseSpeed: @escaping () -> Void,
@@ -69,6 +71,7 @@ class UIPanel: SKNode {
         addDayCountLabel()
         addOrganismCountLabel()
         addLightLevelLabel()
+        addTimeLabel()
         addRestartLabel()
         addSpeedLabel()
         addPauseButton()
@@ -101,6 +104,21 @@ class UIPanel: SKNode {
             .assign(to: \.text, on: lightLevelLabel)
             .store(in: &cancellables)
         
+        dayProgress
+            .map { progress in
+                let hours = 24 * progress
+                let wholeHours: CGFloat = floor(hours)
+                // Sunrise at 7.00 Sunset 19.00
+                let correctedHours = Int((wholeHours + 7).truncatingRemainder(dividingBy: 24))
+                let reminder = hours - wholeHours
+                let minutes = Int(60 * reminder)
+                
+                
+                return "Time: \(String(format: "%02d", correctedHours)):\(String(format: "%02d", minutes))"
+            }
+            .assign(to: \.text, on: timeLabel)
+            .store(in: &cancellables)
+        
         gameState
             .sink { [pauseButton] state in
                 pauseButton?.fontColor = state == .stopped ? .gray : Constants.textColor
@@ -120,6 +138,7 @@ class UIPanel: SKNode {
         dayCountLabel.position = CGPoint(x: 10 , y: Constants.panelHeight - 40)
         organismCountLabel.position = CGPoint(x: 10 , y: Constants.panelHeight - 90)
         lightLevelLabel.position = CGPoint(x: size.width / 2 , y: Constants.panelHeight - 40)
+        timeLabel.position = CGPoint(x: size.width / 2 , y: Constants.panelHeight - 90)
         restartButton.position = CGPoint(x: size.width - 150, y: Constants.panelHeight - 90)
         speedLabel.position = CGPoint(x: size.width - 150, y: Constants.panelHeight - 40)
         increaseSpeedButton.position = CGPoint(x: speedLabel.position.x + 70, y: Constants.panelHeight - 40)
@@ -158,6 +177,14 @@ class UIPanel: SKNode {
         lightLevelLabel.fontColor = Constants.textColor
         lightLevelLabel.zPosition = 100
         addChild(lightLevelLabel)
+    }
+    
+    private func addTimeLabel() {
+        timeLabel = SKLabelNode(fontNamed: "Helvetica")
+        timeLabel.fontSize = 18
+        timeLabel.fontColor = Constants.textColor
+        timeLabel.zPosition = 100
+        addChild(timeLabel)
     }
     
     // Right

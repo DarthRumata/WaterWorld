@@ -21,6 +21,7 @@ class GameScene: SKScene {
     @Published var simulationSpeed: TimeInterval = 1.0 // Default speed
     @Published var totalTime: TimeInterval = 0.0 // Keeps track of elapsed time
     @Published var lastUpdateTime: TimeInterval?
+    @Published var dayProgress: CGFloat = 0
     @Published var gameState: GameState = .stopped
     
     // UI
@@ -30,8 +31,8 @@ class GameScene: SKScene {
     // Combine
     private var cancellables = Set<AnyCancellable>()
     
-    @Published private var organisms = [Organism]()
-    private var organismModels = [OrganismModel]()
+    @Published private var organisms = [UUID: Organism]()
+    private var organismModels = [UUID: OrganismModel]()
 
     class func newGameScene() -> GameScene {
         // Load 'GameScene.sks' as an SKScene.
@@ -49,16 +50,17 @@ class GameScene: SKScene {
     override func didMove(to view: SKView) {
         super.didMove(to: view)
         
+        view.window?.acceptsMouseMovedEvents = true
+        
         setUpScene()
         
-        print("Scene size: \(size)")
-        print("View size: \(view.bounds.size)")
+        //print("Scene size: \(size)")
+        //print("View size: \(view.bounds.size)")
     }
     
     override func update(_ currentTime: TimeInterval) {
         // Calculate delta time
         let deltaTime = currentTime - (lastUpdateTime ?? currentTime)
-        print(deltaTime)
         lastUpdateTime = currentTime
         
         guard gameState == .active else {
@@ -71,13 +73,13 @@ class GameScene: SKScene {
         let timeInDay = totalTime.truncatingRemainder(dividingBy: Constants.dayDuration)
         
         // Update light level (0 to 10 and back to 0)
-        let progress = CGFloat(timeInDay / Constants.dayDuration)
-        if progress <= 0.25 {
+        dayProgress = CGFloat(timeInDay / Constants.dayDuration)
+        if dayProgress <= 0.25 {
             // Morning to noon (lightLevel increases from 0 to 10)
-            lightLevel = Constants.maxLightLevel * (progress * 4)
-        } else if progress <= 0.5 {
+            lightLevel = Constants.maxLightLevel * (dayProgress * 4)
+        } else if dayProgress <= 0.5 {
             // Noon to night (lightLevel decreases from 10 to 0)
-            lightLevel = Constants.maxLightLevel * (1 - ((progress - 0.25) * 4))
+            lightLevel = Constants.maxLightLevel * (1 - ((dayProgress - 0.25) * 4))
         } else {
             lightLevel = 0
         }
@@ -127,6 +129,7 @@ class GameScene: SKScene {
             organismsCount: $organisms.map { $0.count }.eraseToAnyPublisher(),
             speed: $simulationSpeed.eraseToAnyPublisher(),
             lightLevel: $lightLevel.eraseToAnyPublisher(),
+            dayProgress: $dayProgress.eraseToAnyPublisher(),
             gameState: $gameState.eraseToAnyPublisher(),
             onTapRestartButton: { [weak self] in
                 self?.restartSimulation()
@@ -176,14 +179,20 @@ class GameScene: SKScene {
             print("pos: \(position)")
 
             let baseColor = SKColor.green
-            let model = OrganismModel()
+            
+            let model = OrganismModel(brain: RandomBrain()) { [weak self] id in
+                self?.organismModels.removeValue(forKey: id)
+                let organism = self?.organisms[id]
+                organism?.removeFromParent()
+                self?.organisms.removeValue(forKey: id)
+            }
 
             let organism = Organism(model: model, position: position, color: baseColor, radius: 10) {
                 print("Organism index: \(i)")
                 $0.moveDown()
             }
-            organisms.append(organism)
-            organismModels.append(model)
+            organisms[model.id] = organism
+            organismModels[model.id] = model
             container.addChild(organism)
         }
     }
@@ -196,7 +205,7 @@ class GameScene: SKScene {
         lightLevel = 0
         
         // Remove existing organisms
-        for organism in organisms {
+        organisms.forEach { (_, organism) in
             organism.removeFromParent()
         }
         organismModels.removeAll()
@@ -211,8 +220,9 @@ class GameScene: SKScene {
     // State updates
     
     private func notifyOrganisms() {
-        for (model, view) in zip(organismModels, organisms) {
+        for model in organismModels.values {
             Task {
+                guard let view = organisms[model.id] else { fatalError("Model should always pair with view") }
                 let depth = normalizedDepth(for: view)
                 let lightLevel = lightLevel(atDepth: depth)
                 let input = SensorInput(lightLevel: lightLevel, depth: depth, totalTimeElapsed: totalTime)
