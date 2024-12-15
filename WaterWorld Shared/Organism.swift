@@ -19,6 +19,9 @@ private enum Constants {
 }
 
 class Organism: SKNode {
+    var id: UUID {
+        model.id
+    }
     private let bubble: SKShapeNode
     private let nucleus: SKShapeNode
 

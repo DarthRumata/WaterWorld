@@ -8,12 +8,8 @@
 import Combine
 import Foundation
 
-private enum Constants {
-    static let maxEnergy: Int = 200
-}
-
 actor OrganismModel: Equatable {
-    enum Action: Sendable {
+    enum Action: Sendable, CaseIterable {
         case moveUp
         case moveDown
         case wait
@@ -31,6 +27,7 @@ actor OrganismModel: Equatable {
     // Public state
     
     let id = UUID()
+    let name: String
     private(set) var direction: Direction = .left
     
     var actionPublisher: AsyncStream<Action> {
@@ -41,7 +38,7 @@ actor OrganismModel: Equatable {
     
     // Private State
     
-    @Published private var energy = Constants.maxEnergy
+    @Published private(set) var energy = GlobalConstants.maxEnergy
     private var isBusy = false
     
     private var isDead: Bool {
@@ -60,9 +57,11 @@ actor OrganismModel: Equatable {
     
     private let brain: BrainProtocol
     private let logger: Logger
+    private let energyCalculator = EnergyCalculator()
     
-    init(brain: BrainProtocol, logger: Logger, onDeath: @escaping @MainActor @Sendable (UUID) -> Void) {
+    init(brain: BrainProtocol, name: String, logger: Logger, onDeath: @escaping @MainActor @Sendable (UUID) -> Void) {
         self.brain = brain
+        self.name = name
         self.logger = logger
         self.onDeath = onDeath
         
@@ -119,19 +118,9 @@ actor OrganismModel: Equatable {
     }
     
     private func gainEnergy(fromLightLevel lightLevel: CGFloat) {
-        let gain: Int
-        switch lightLevel {
-        case 7 ... 10:
-            gain = 14
-        case 5..<7:
-            gain = 9
-        case 2..<5:
-            gain = 5
-        default:
-            gain = 0
-        }
+        let gain = energyCalculator.energyGain(fromLightLevel: lightLevel)
         
-        energy = min(gain + energy, Constants.maxEnergy)
+        energy = min(gain + energy, GlobalConstants.maxEnergy)
     }
 }
 

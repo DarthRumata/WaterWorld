@@ -8,7 +8,8 @@
 import Foundation
 
 struct SensorInput: Equatable, Sendable {
-    let lightLevel: CGFloat
-    let depth: CGFloat
-    let totalTimeElapsed: TimeInterval
+    let lightLevel: Double
+    let depth: Double
+    let dayProgress: Double
+    let energy: Double
 }

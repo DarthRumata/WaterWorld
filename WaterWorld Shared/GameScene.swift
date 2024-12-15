@@ -6,33 +6,32 @@
 //
 
 import Combine
+import Foundation
 import SpriteKit
-
-private enum Constants {
-    static let maxLightLevel: CGFloat = 10
-    static let dayDuration: TimeInterval = 24.0 // Total duration of one day cycle in seconds
-    static let initialPopulation = 100
-}
 
 class GameScene: SKScene {
     // Global state
-    @Published var lightLevel: CGFloat = 0 // Ranges from 0 to 10
+    @Published var lightLevel: Double = 0 // Ranges from 0 to 10
     @Published var dayCount: Int = 0
     @Published var simulationSpeed: TimeInterval = 1.0 // Default speed
     @Published var totalTime: TimeInterval = 0.0 // Keeps track of elapsed time
     @Published var lastUpdateTime: TimeInterval?
-    @Published var dayProgress: CGFloat = 0
+    /// 0 - sunrise, 0.25 - noon, 0.5 - sunset, 0.5 - 1 - night
+    @Published var dayProgress: Double = 0
     @Published var gameState: GameState = .stopped
     
     // UI
     private var uiPanel: UIPanel?
     private var container: WaterContainer!
+    private var infoPopover: NSPopover?
+    private var popoverNode: CustomPopoverNode?
     
     // Combine
     private var cancellables = Set<AnyCancellable>()
     
     @Published private var organisms = [UUID: Organism]()
     private var organismModels = [UUID: OrganismModel]()
+    private let nameGenerator = UniqueNameGenerator(syllables: ["ka", "bar", "ma", "lo", "ni", "mek", "ta", "pon", "ger", "du"])
 
     class func newGameScene() -> GameScene {
         // Load 'GameScene.sks' as an SKScene.
@@ -70,22 +69,22 @@ class GameScene: SKScene {
         totalTime += deltaTime * TimeInterval(simulationSpeed)
         
         // Calculate the current time in the day cycle
-        let timeInDay = totalTime.truncatingRemainder(dividingBy: Constants.dayDuration)
+        let timeInDay = totalTime.truncatingRemainder(dividingBy: GlobalConstants.dayDuration)
         
         // Update light level (0 to 10 and back to 0)
-        dayProgress = CGFloat(timeInDay / Constants.dayDuration)
+        dayProgress = CGFloat(timeInDay / GlobalConstants.dayDuration)
         if dayProgress <= 0.25 {
             // Morning to noon (lightLevel increases from 0 to 10)
-            lightLevel = Constants.maxLightLevel * (dayProgress * 4)
+            lightLevel = GlobalConstants.maxLightLevel * (dayProgress * 4)
         } else if dayProgress <= 0.5 {
             // Noon to night (lightLevel decreases from 10 to 0)
-            lightLevel = Constants.maxLightLevel * (1 - ((dayProgress - 0.25) * 4))
+            lightLevel = GlobalConstants.maxLightLevel * (1 - ((dayProgress - 0.25) * 4))
         } else {
             lightLevel = 0
         }
         
         speed = simulationSpeed
-        dayCount = Int(totalTime) / Int(Constants.dayDuration)
+        dayCount = Int(totalTime) / Int(GlobalConstants.dayDuration)
         
         notifyOrganisms()
     }
@@ -108,13 +107,14 @@ class GameScene: SKScene {
         // Create UI
         addUIPanel()
         addContainer()
+        addPopoverNode()
         
         $lightLevel
             .map { lightLevel in
                 if lightLevel == 0 {
                     return SKColor(white: 0, alpha: 1)
                 }
-                let brightness = 0.1 + (lightLevel / Constants.maxLightLevel) * 0.9 // Brightness from 0.2 to 1.0
+                let brightness = 0.1 + (lightLevel / GlobalConstants.maxLightLevel) * 0.9 // Brightness from 0.2 to 1.0
                 let color = SKColor(hue: 0.1667, saturation: 1, brightness: brightness, alpha: 1.0)
                 
                 return color
@@ -171,7 +171,7 @@ class GameScene: SKScene {
     }
     
     private func addOrganisms() {
-        for i in 0 ..< Constants.initialPopulation {
+        for i in 0 ..< GlobalConstants.initialPopulation {
             let xPosition = CGFloat.random(in: 10...container.size.width - 10)
             let yPosition = CGFloat.random(in: 10...container.size.height - 10)
             let position = CGPoint(x: xPosition, y: yPosition)
@@ -180,7 +180,11 @@ class GameScene: SKScene {
 
             let baseColor = SKColor.green
             let logger: Logger = i == 0 ? ConsoleLogger() : EmptyLogger()
-            let model = OrganismModel(brain: RandomBrain(), logger: logger) { [weak self] id in
+            let model = OrganismModel(
+                brain: RandomBrain(),
+                name: nameGenerator.generateName() ?? "\(i)",
+                logger: logger
+            ) { [weak self] id in
                 self?.organismModels.removeValue(forKey: id)
                 let organism = self?.organisms[id]
                 organism?.removeFromParent()
@@ -192,13 +196,38 @@ class GameScene: SKScene {
                 position: position,
                 color: baseColor,
                 radius: 10
-            ) { _ in
-                print("Organism index: \(i)")
+            ) { [weak self] organism in
+                self?.showOrganismPopover(sceneLocation: organism.position, model: model)
             }
             organisms[model.id] = organism
             organismModels[model.id] = model
             container.addChild(organism)
         }
+    }
+    
+    private func addPopoverNode() {
+        // Initialize the popover
+        popoverNode = CustomPopoverNode(title: "Title", details: "Details", size: CGSize(width: 200, height: 100))
+        if let popover = popoverNode {
+            addChild(popover)
+        }
+    }
+    
+    private func showOrganismPopover(sceneLocation: CGPoint, model: OrganismModel) {
+        Task {
+            let organismEnergy = await model.energy
+            
+            popoverNode?.show(
+                at: sceneLocation,
+                in: self,
+                title: model.name,
+                details: "Energy: \(organismEnergy)"
+            )
+        }
+    }
+
+    private func hidePopover() {
+        infoPopover?.close()
     }
     
     // Control state
@@ -229,7 +258,12 @@ class GameScene: SKScene {
                 guard let view = organisms[model.id] else { fatalError("Model should always pair with view") }
                 let depth = normalizedDepth(for: view)
                 let lightLevel = lightLevel(atDepth: depth)
-                let input = SensorInput(lightLevel: lightLevel, depth: depth, totalTimeElapsed: totalTime)
+                let input = await SensorInput(
+                    lightLevel: lightLevel,
+                    depth: depth,
+                    dayProgress: dayProgress,
+                    energy: model.energy
+                )
                 await model.handleChanges(input)
             }
         }
@@ -237,9 +271,7 @@ class GameScene: SKScene {
     
     // Normalized from 0 to 100
     private func normalizedDepth(for organism: Organism) -> CGFloat {
-        let maxDepth = container.size.height
-        let currentDepth = maxDepth - organism.position.y
-        return currentDepth / maxDepth * 100
+        normalizedDepth(atPositionY: organism.position.y)
     }
     
     // ln(depthLightLevel / surfaceLightLevel) / depth
@@ -249,6 +281,12 @@ class GameScene: SKScene {
     private func lightLevel(atDepth depth: CGFloat) -> CGFloat {
         return lightLevel * exp(depth * lightDecayRate)
     }
+    
+    private func normalizedDepth(atPositionY positionY: CGFloat) -> CGFloat {
+        let maxDepth = container.size.height
+        let currentDepth = maxDepth - positionY
+        return currentDepth / maxDepth * GlobalConstants.maxDepth
+    }
 }
 
 #if os(OSX)
@@ -256,8 +294,37 @@ class GameScene: SKScene {
 extension GameScene {
     override func mouseDown(with event: NSEvent) {}
     
-    override func mouseDragged(with event: NSEvent) {}
+    override func mouseDragged(with event: NSEvent) {
+        let locationInView = event.locationInWindow
+
+        // Convert the mouse location from view coordinates to scene coordinates
+        let sceneLocation = convertPoint(fromView: locationInView)
+        
+        // Find nodes at the mouse location
+        let nodesAtPoint = nodes(at: sceneLocation)
+        
+        if let organismNode = nodesAtPoint.first(where: { $0 is Organism }) as? Organism {
+            let model = organismModels[organismNode.id]!
+            // Show the popover
+            showOrganismPopover(sceneLocation: sceneLocation, model: model)
+            
+        } else {
+            let depth = normalizedDepth(atPositionY: sceneLocation.y)
+            let light = lightLevel(atDepth: depth)
+            let energyCalculator = EnergyCalculator()
+            let gain = energyCalculator.energyGain(fromLightLevel: light)
+            
+            popoverNode?.show(
+                at: sceneLocation,
+                in: self,
+                title: "Depth: \(depth.formatted())",
+                details: "Light: \(light.formatted()), gain: \(gain)"
+            )
+        }
+    }
     
-    override func mouseUp(with event: NSEvent) {}
+    override func mouseUp(with event: NSEvent) {
+        popoverNode?.hide()
+    }
 }
 #endif
