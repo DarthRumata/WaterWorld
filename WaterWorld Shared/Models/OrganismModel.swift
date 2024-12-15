@@ -71,7 +71,7 @@ actor OrganismModel: Equatable {
     }
     
     // Public methods
-    
+    // TODO: pass this only per 1 game tick, calculate energy loss per tick
     func handleChanges(_ input: SensorInput) async {
         if isBusy || isDead { return }
         

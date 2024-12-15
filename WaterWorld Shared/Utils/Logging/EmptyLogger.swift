@@ -6,6 +6,14 @@
 //
 
 actor EmptyLogger: Logger {
+    func track(action: OrganismModel.Action, dayProgress: Double) {
+        
+    }
+    
+    func reportGatheredStatistics() {
+        
+    }
+    
     func log(message: String) {
         
     }

@@ -181,10 +181,14 @@ class GameScene: SKScene {
             let baseColor = SKColor.green
             let logger: Logger = i == 0 ? ConsoleLogger() : EmptyLogger()
             let model = OrganismModel(
-                brain: RandomBrain(),
+                brain: NeuralBrain(),
                 name: nameGenerator.generateName() ?? "\(i)",
                 logger: logger
             ) { [weak self] id in
+                Task {
+                    await logger.reportGatheredStatistics()
+                }
+                
                 self?.organismModels.removeValue(forKey: id)
                 let organism = self?.organisms[id]
                 organism?.removeFromParent()
@@ -230,7 +234,8 @@ class GameScene: SKScene {
         infoPopover?.close()
     }
     
-    // Control state
+    // MARK: Control state
+    
     private func restartSimulation() {
         // Reset variables
         totalTime = 0.0
@@ -250,12 +255,13 @@ class GameScene: SKScene {
         gameState = .active
     }
     
-    // State updates
+    // MARK: State updates
     
     private func notifyOrganisms() {
         for model in organismModels.values {
             Task {
                 guard let view = organisms[model.id] else { fatalError("Model should always pair with view") }
+                view.speed = simulationSpeed
                 let depth = normalizedDepth(for: view)
                 let lightLevel = lightLevel(atDepth: depth)
                 let input = await SensorInput(

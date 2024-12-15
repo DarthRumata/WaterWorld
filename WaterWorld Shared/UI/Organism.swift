@@ -80,9 +80,6 @@ class Organism: SKNode {
     }
 
     override func mouseDown(with event: NSEvent) {
-        // Add your interaction code here
-        // For example, print organism details or change color
-        print("Organism clicked at position: \(position)")
         onClick(self)
     }
 
