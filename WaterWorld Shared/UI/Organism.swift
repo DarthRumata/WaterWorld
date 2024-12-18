@@ -10,18 +10,19 @@ import SpriteKit
 
 enum PhysicsCategory {
     static let organism: UInt32 = 0x1 << 0
+    static let boundary: UInt32 = 0x1 << 1
     // Add other categories if needed
 }
 
 private enum Constants {
-    static let movementPace: CGFloat = 20
-    static let movementDuration: CGFloat = 0.3
+    static let movementPace: CGFloat = 40
 }
 
 class Organism: SKNode {
     var id: UUID {
         model.id
     }
+
     private let bubble: SKShapeNode
     private let nucleus: SKShapeNode
 
@@ -66,7 +67,7 @@ class Organism: SKNode {
         physics.mass = 1
         physics.isDynamic = true
         physics.categoryBitMask = PhysicsCategory.organism
-        physics.collisionBitMask = PhysicsCategory.organism
+        physics.collisionBitMask = PhysicsCategory.boundary | PhysicsCategory.organism
         physics.contactTestBitMask = PhysicsCategory.organism
 
         physicsBody = physics
@@ -141,14 +142,14 @@ class Organism: SKNode {
         newPosition.y = max(minY, min(newPosition.y, maxY))
 
         if position != newPosition {
-            let moveDown = SKAction.move(to: newPosition, duration: Constants.movementDuration)
-            await run(moveDown)
-            await model.setIsBusy(false)
+            let moveAction = SKAction.move(to: newPosition, duration: GlobalConstants.gameTickDuration)
+            await run(moveAction)
         }
+        await model.setIsBusy(false)
     }
-    
+
     private func wait() async {
-        try? await Task.sleep(for: .seconds(Constants.movementDuration / speed))
+        try? await Task.sleep(for: .seconds(GlobalConstants.gameTickDuration / speed))
         await model.setIsBusy(false)
     }
 }

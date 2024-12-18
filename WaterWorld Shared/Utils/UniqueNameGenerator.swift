@@ -6,11 +6,18 @@
 //
 
 class UniqueNameGenerator {
+    private let syllables: [String]
     private var namePool: [String] = []
 
     init(syllables: [String]) {
+        self.syllables = syllables
+        
+        regenerate()
+    }
+    
+    func regenerate() {
         // Precompute all possible names (2–4 syllables)
-        for syllableCount in 2 ... 4 {
+        for syllableCount in 2...4 {
             generateCombinations(from: syllables, length: syllableCount)
         }
         // Shuffle the pool to ensure randomness

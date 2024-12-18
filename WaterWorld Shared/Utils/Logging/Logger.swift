@@ -7,6 +7,4 @@
 
 protocol Logger: Actor {
     func log(message: String)
-    func track(action: OrganismModel.Action, dayProgress: Double)
-    func reportGatheredStatistics()
 }

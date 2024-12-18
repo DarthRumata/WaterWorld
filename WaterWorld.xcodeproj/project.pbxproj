@@ -23,6 +23,7 @@
 				Brains/BrainProtocol.swift,
 				Brains/NeuralBrain.swift,
 				Brains/RandomBrain.swift,
+				Brains/SequenceBrain.swift,
 				GameScene.sks,
 				GameScene.swift,
 				GlobalConstants.swift,
@@ -39,6 +40,7 @@
 				Utils/Logging/ConsoleLogger.swift,
 				Utils/Logging/EmptyLogger.swift,
 				Utils/Logging/Logger.swift,
+				Utils/Tracking/OrganismTracker.swift,
 				Utils/UniqueNameGenerator.swift,
 			);
 			target = 120130962CE30F86003DC54C /* WaterWorld macOS */;

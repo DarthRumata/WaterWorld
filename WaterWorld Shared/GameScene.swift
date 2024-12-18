@@ -11,27 +11,40 @@ import SpriteKit
 
 class GameScene: SKScene {
     // Global state
-    @Published var lightLevel: Double = 0 // Ranges from 0 to 10
-    @Published var dayCount: Int = 0
-    @Published var simulationSpeed: TimeInterval = 1.0 // Default speed
-    @Published var totalTime: TimeInterval = 0.0 // Keeps track of elapsed time
-    @Published var lastUpdateTime: TimeInterval?
+    
+    @Published private var lightLevel: Double = 0 // Ranges from 0 to 10
+    @Published private var dayCount: Int = 0
+    @Published private var simulationSpeed: TimeInterval = 1.0 // Default speed
+    @Published private var totalTime: TimeInterval = 0.0 // Keeps track of elapsed time
+    @Published private var lastUpdateTime: TimeInterval?
+    private var timeSinceLastTick: TimeInterval = 0
     /// 0 - sunrise, 0.25 - noon, 0.5 - sunset, 0.5 - 1 - night
-    @Published var dayProgress: Double = 0
-    @Published var gameState: GameState = .stopped
+    @Published private var dayProgress: Double = 0
+    @Published private var gameState: GameState = .stopped
     
     // UI
+    
     private var uiPanel: UIPanel?
     private var container: WaterContainer!
     private var infoPopover: NSPopover?
     private var popoverNode: CustomPopoverNode?
     
     // Combine
+    
     private var cancellables = Set<AnyCancellable>()
+    
+    // Models
     
     @Published private var organisms = [UUID: Organism]()
     private var organismModels = [UUID: OrganismModel]()
+    
+    // Utils
+    
     private let nameGenerator = UniqueNameGenerator(syllables: ["ka", "bar", "ma", "lo", "ni", "mek", "ta", "pon", "ger", "du"])
+    
+    // Tasks
+    
+    private var notificationTask: Task<Void, Error>?
 
     class func newGameScene() -> GameScene {
         // Load 'GameScene.sks' as an SKScene.
@@ -52,9 +65,6 @@ class GameScene: SKScene {
         view.window?.acceptsMouseMovedEvents = true
         
         setUpScene()
-        
-        // print("Scene size: \(size)")
-        // print("View size: \(view.bounds.size)")
     }
     
     override func update(_ currentTime: TimeInterval) {
@@ -65,28 +75,16 @@ class GameScene: SKScene {
         guard gameState == .active else {
             return
         }
+        
+        let scaledDeltaTime = deltaTime * simulationSpeed
+        timeSinceLastTick += scaledDeltaTime
         // Update total time considering simulation speed
-        totalTime += deltaTime * TimeInterval(simulationSpeed)
+        totalTime += scaledDeltaTime
         
-        // Calculate the current time in the day cycle
-        let timeInDay = totalTime.truncatingRemainder(dividingBy: GlobalConstants.dayDuration)
-        
-        // Update light level (0 to 10 and back to 0)
-        dayProgress = CGFloat(timeInDay / GlobalConstants.dayDuration)
-        if dayProgress <= 0.25 {
-            // Morning to noon (lightLevel increases from 0 to 10)
-            lightLevel = GlobalConstants.maxLightLevel * (dayProgress * 4)
-        } else if dayProgress <= 0.5 {
-            // Noon to night (lightLevel decreases from 10 to 0)
-            lightLevel = GlobalConstants.maxLightLevel * (1 - ((dayProgress - 0.25) * 4))
-        } else {
-            lightLevel = 0
+        if timeSinceLastTick >= GlobalConstants.gameTickDuration {
+            gameTick()
+            timeSinceLastTick -= GlobalConstants.gameTickDuration
         }
-        
-        speed = simulationSpeed
-        dayCount = Int(totalTime) / Int(GlobalConstants.dayDuration)
-        
-        notifyOrganisms()
     }
     
     override func didChangeSize(_ oldSize: CGSize) {
@@ -152,6 +150,10 @@ class GameScene: SKScene {
                 }
                 
                 self.gameState = self.gameState == .active ? .paused : .active
+                
+                if self.gameState == .paused {
+                    cancelCurrentUpdate()
+                }
             }
         )
         
@@ -175,19 +177,18 @@ class GameScene: SKScene {
             let xPosition = CGFloat.random(in: 10...container.size.width - 10)
             let yPosition = CGFloat.random(in: 10...container.size.height - 10)
             let position = CGPoint(x: xPosition, y: yPosition)
-            
-            print("pos: \(position)")
 
             let baseColor = SKColor.green
             let logger: Logger = i == 0 ? ConsoleLogger() : EmptyLogger()
+            let tracker = OrganismTracker(logger: logger)
+            
             let model = OrganismModel(
                 brain: NeuralBrain(),
                 name: nameGenerator.generateName() ?? "\(i)",
-                logger: logger
-            ) { [weak self] id in
-                Task {
-                    await logger.reportGatheredStatistics()
-                }
+                logger: logger,
+                tracker: tracker
+            ) { [weak self] model in
+                let id = model.id
                 
                 self?.organismModels.removeValue(forKey: id)
                 let organism = self?.organisms[id]
@@ -237,6 +238,11 @@ class GameScene: SKScene {
     // MARK: Control state
     
     private func restartSimulation() {
+        // Stop updates
+        gameState = .stopped
+
+        cancelCurrentUpdate()
+        
         // Reset variables
         totalTime = 0.0
         dayCount = 0
@@ -249,6 +255,8 @@ class GameScene: SKScene {
         organismModels.removeAll()
         organisms.removeAll()
         
+        nameGenerator.regenerate()
+        
         // Add new organisms
         addOrganisms()
         
@@ -257,10 +265,39 @@ class GameScene: SKScene {
     
     // MARK: State updates
     
+    private func gameTick() {
+        // Calculate the current time in the day cycle
+        let timeInDay = totalTime.truncatingRemainder(dividingBy: GlobalConstants.dayDuration)
+        
+        // Update light level (0 to 10 and back to 0)
+        dayProgress = CGFloat(timeInDay / GlobalConstants.dayDuration)
+        if dayProgress <= 0.25 {
+            // Morning to noon (lightLevel increases from 0 to 10)
+            lightLevel = GlobalConstants.maxLightLevel * (dayProgress * 4)
+        } else if dayProgress <= 0.5 {
+            // Noon to night (lightLevel decreases from 10 to 0)
+            lightLevel = GlobalConstants.maxLightLevel * (1 - ((dayProgress - 0.25) * 4))
+        } else {
+            lightLevel = 0
+        }
+        
+        speed = simulationSpeed
+        dayCount = Int(totalTime) / Int(GlobalConstants.dayDuration)
+        
+        notifyOrganisms()
+    }
+    
     private func notifyOrganisms() {
-        for model in organismModels.values {
-            Task {
-                guard let view = organisms[model.id] else { fatalError("Model should always pair with view") }
+        notificationTask = Task {
+            try Task.checkCancellation()
+            
+            for (i, model) in organismModels.values.enumerated() {
+                try Task.checkCancellation()
+                
+                guard let view = organisms[model.id] else {
+                    print("\(i):Model \(model.id) should always pair with view")
+                    return
+                }
                 view.speed = simulationSpeed
                 let depth = normalizedDepth(for: view)
                 let lightLevel = lightLevel(atDepth: depth)
@@ -274,6 +311,14 @@ class GameScene: SKScene {
             }
         }
     }
+    
+    private func cancelCurrentUpdate() {
+        notificationTask?.cancel()
+        notificationTask = nil
+        print("Update canceld")
+    }
+    
+    // MARK: Utils
     
     // Normalized from 0 to 100
     private func normalizedDepth(for organism: Organism) -> CGFloat {

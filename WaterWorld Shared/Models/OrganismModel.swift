@@ -51,18 +51,26 @@ actor OrganismModel: Equatable {
     
     // Handlers
     
-    private let onDeath: @MainActor @Sendable (UUID) -> Void
+    private let onDeath: @MainActor @Sendable (OrganismModel) -> Void
     
     // Dependencies
     
     private let brain: BrainProtocol
-    private let logger: Logger
+    let logger: Logger
+    private let tracker: OrganismTracker
     private let energyCalculator = EnergyCalculator()
     
-    init(brain: BrainProtocol, name: String, logger: Logger, onDeath: @escaping @MainActor @Sendable (UUID) -> Void) {
+    init(
+        brain: BrainProtocol,
+        name: String,
+        logger: Logger,
+        tracker: OrganismTracker,
+        onDeath: @escaping @MainActor @Sendable (OrganismModel) -> Void
+    ) {
         self.brain = brain
         self.name = name
         self.logger = logger
+        self.tracker = tracker
         self.onDeath = onDeath
         
         Task {
@@ -71,16 +79,18 @@ actor OrganismModel: Equatable {
     }
     
     // Public methods
-    // TODO: pass this only per 1 game tick, calculate energy loss per tick
     func handleChanges(_ input: SensorInput) async {
-        if isBusy || isDead { return }
+        if isDead { return }
         
         isBusy = true
+        
+        energy -= GlobalConstants.idleEnergyLoss
+        gainEnergy(fromLightLevel: input.lightLevel)
         
         await calculateNextAction(input: input)
     }
     
-    func setIsBusy(_ busy: Bool) async {
+    func setIsBusy(_ busy: Bool) {
         isBusy = busy
     }
     
@@ -89,7 +99,9 @@ actor OrganismModel: Equatable {
     private func observeEnergyChanges() async {
         for await energyValue in $energy.values {
             if energyValue <= 0 {
-                await onDeath(id)
+                await onDeath(self)
+                await tracker.reportGatheredStatistics(forName: name)
+                break
             }
         }
     }
@@ -103,17 +115,19 @@ actor OrganismModel: Equatable {
             
         actionContinuation?.yield(action)
         
-        gainEnergy(fromLightLevel: input.lightLevel)
         spentEnergy(by: action)
         
-        await logger.log(message: "action: \(action), energy: \(energy)")
+        Task {
+            await tracker.track(action: action, dayProgress: input.dayProgress)
+            await logger.log(
+                message: "t: \(input.dayProgress.formatted()) action: \(action), energy: \(energy)"
+            )
+        }
     }
     
     private func spentEnergy(by action: Action) {
-        if action == .wait {
-            energy -= 1
-        } else {
-            energy -= 2
+        if action != .wait {
+            energy -= GlobalConstants.movementEnergyLoss
         }
     }
     
