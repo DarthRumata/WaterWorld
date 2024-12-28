@@ -19,4 +19,7 @@ enum GlobalConstants {
     static let maxEnergy: Double = 200
     static let idleEnergyLoss: Double = 0.5
     static let movementEnergyLoss: Double = 1.5
+    
+    // Movement
+    static let movementPace: CGFloat = 824 / 25
 }

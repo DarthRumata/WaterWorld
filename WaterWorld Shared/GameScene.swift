@@ -10,6 +10,10 @@ import Foundation
 import SpriteKit
 
 class GameScene: SKScene {
+    // MARK: Callbacks
+    
+    var onTapOrganism: ((OrganismModel?) -> Void)?
+    
     // Global state
     
     @Published private var lightLevel: Double = 0 // Ranges from 0 to 10
@@ -55,6 +59,8 @@ class GameScene: SKScene {
         
         // Set the scale mode to scale to fit the window
         scene.scaleMode = .aspectFit
+        scene.physicsWorld.gravity = .zero // Keep gravity neutral
+        scene.physicsWorld.speed = 1.0 // Default speed for consistent resolution
         
         return scene
     }
@@ -63,14 +69,17 @@ class GameScene: SKScene {
         super.didMove(to: view)
         
         view.window?.acceptsMouseMovedEvents = true
+        backgroundColor = .cyan
         
         setUpScene()
+        didChangeSize(size)
     }
     
     override func update(_ currentTime: TimeInterval) {
         // Calculate delta time
         let deltaTime = currentTime - (lastUpdateTime ?? currentTime)
         lastUpdateTime = currentTime
+        clampOrganismPositions()
         
         guard gameState == .active else {
             return
@@ -135,14 +144,14 @@ class GameScene: SKScene {
             onTapIncreaseSpeed: { [weak self] in
                 guard let self else { return }
                 
-                let newSpeed = self.simulationSpeed + 1
+                let newSpeed = self.simulationSpeed <= 1 ? self.simulationSpeed * 2 : self.simulationSpeed + 1
                 self.simulationSpeed = min(newSpeed, 100)
             },
             onTapDecreaseSpeed: { [weak self] in
                 guard let self else { return }
                 
-                let newSpeed = self.simulationSpeed - 1
-                self.simulationSpeed = max(newSpeed, 0)
+                let newSpeed = self.simulationSpeed <= 1 ? self.simulationSpeed / 2 : self.simulationSpeed - 1
+                self.simulationSpeed = max(newSpeed, 0.25)
             },
             onTapPause: { [weak self] in
                 guard let self, self.gameState != .stopped else {
@@ -202,7 +211,7 @@ class GameScene: SKScene {
                 color: baseColor,
                 radius: 10
             ) { [weak self] organism in
-                self?.showOrganismPopover(sceneLocation: organism.position, model: model)
+                self?.onTapOrganism?(model)
             }
             organisms[model.id] = organism
             organismModels[model.id] = model
@@ -216,23 +225,6 @@ class GameScene: SKScene {
         if let popover = popoverNode {
             addChild(popover)
         }
-    }
-    
-    private func showOrganismPopover(sceneLocation: CGPoint, model: OrganismModel) {
-        Task {
-            let organismEnergy = await model.energy
-            
-            popoverNode?.show(
-                at: sceneLocation,
-                in: self,
-                title: model.name,
-                details: "Energy: \(organismEnergy)"
-            )
-        }
-    }
-
-    private func hidePopover() {
-        infoPopover?.close()
     }
     
     // MARK: Control state
@@ -282,6 +274,7 @@ class GameScene: SKScene {
         }
         
         speed = simulationSpeed
+        physicsWorld.speed = simulationSpeed
         dayCount = Int(totalTime) / Int(GlobalConstants.dayDuration)
         
         notifyOrganisms()
@@ -318,6 +311,21 @@ class GameScene: SKScene {
         print("Update canceld")
     }
     
+    // MARK: Update overlay
+    
+    private func showOrganismPopover(sceneLocation: CGPoint, model: OrganismModel) {
+        Task {
+            let organismEnergy = await model.energy
+            
+            popoverNode?.show(
+                at: sceneLocation,
+                in: self,
+                title: model.name,
+                details: "Energy: \(organismEnergy)"
+            )
+        }
+    }
+    
     // MARK: Utils
     
     // Normalized from 0 to 100
@@ -337,6 +345,15 @@ class GameScene: SKScene {
         let maxDepth = container.size.height
         let currentDepth = maxDepth - positionY
         return currentDepth / maxDepth * GlobalConstants.maxDepth
+    }
+    
+    private func clampOrganismPositions() {
+        for organism in organisms.values {
+            let organismRadius = organism.frame.width
+            let clampedX = max(organismRadius, min(organism.position.x, container.size.width - organismRadius))
+            let clampedY = max(organismRadius, min(organism.position.y, container.size.height - organismRadius))
+            organism.position = CGPoint(x: clampedX, y: clampedY)
+        }
     }
 }
 
@@ -358,7 +375,6 @@ extension GameScene {
             let model = organismModels[organismNode.id]!
             // Show the popover
             showOrganismPopover(sceneLocation: sceneLocation, model: model)
-            
         } else {
             let depth = normalizedDepth(atPositionY: sceneLocation.y)
             let light = lightLevel(atDepth: depth)
@@ -371,6 +387,7 @@ extension GameScene {
                 title: "Depth: \(depth.formatted())",
                 details: "Light: \(light.formatted()), gain: \(gain)"
             )
+            onTapOrganism?(nil)
         }
     }
     

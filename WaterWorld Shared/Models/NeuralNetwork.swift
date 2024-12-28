@@ -5,10 +5,30 @@
 //  Created by Stas Kirichok on 12/14/24.
 //
 
-class NeuralNetwork {
+import Foundation
+
+enum InitializationStrategy {
+    case uniformXavier
+    case uniform
+    
+    func weights(inputCount: Int, outputCount: Int) -> [Double] {
+        let maxDeviation: Double
+        
+        switch self {
+        case .uniformXavier:
+            maxDeviation = sqrt(6 / (Double(inputCount) + Double(outputCount)))
+        case .uniform:
+            maxDeviation = 1
+        }
+        
+        return (0..<inputCount).map { _ in Double.random(in: -maxDeviation...maxDeviation) }
+    }
+}
+
+struct NeuralNetwork: Sendable {
     let layers: [NeuralLayer]
 
-    init(inputSize: Int, hiddenLayerSizes: [Int], outputSize: Int, weightRange: ClosedRange<Double>, biasRange: ClosedRange<Double>) {
+    init(inputSize: Int, hiddenLayerSizes: [Int], outputSize: Int, weightInitStrategy: InitializationStrategy) {
         var previousSize = inputSize
         var allLayers: [NeuralLayer] = []
 
@@ -18,8 +38,7 @@ class NeuralNetwork {
                 NeuralLayer(
                     neuronCount: size,
                     inputCount: previousSize,
-                    weightRange: weightRange,
-                    biasRange: biasRange
+                    weightInitStrategy: weightInitStrategy
                 )
             )
             previousSize = size
@@ -30,8 +49,7 @@ class NeuralNetwork {
             NeuralLayer(
                 neuronCount: outputSize,
                 inputCount: previousSize,
-                weightRange: weightRange,
-                biasRange: biasRange
+                weightInitStrategy: weightInitStrategy
             )
         )
         
@@ -46,15 +64,14 @@ class NeuralNetwork {
     }
 }
 
-class NeuralLayer {
+struct NeuralLayer: Sendable {
     let neurons: [Neuron]
 
-    init(neuronCount: Int, inputCount: Int, weightRange: ClosedRange<Double>, biasRange: ClosedRange<Double>) {
+    init(neuronCount: Int, inputCount: Int, weightInitStrategy: InitializationStrategy) {
         neurons = (0..<neuronCount).map { _ in
             // Create each neuron with random weights and biases
-            let weights = (0..<inputCount).map { _ in Double.random(in: weightRange) }
-            let bias = Double.random(in: biasRange)
-            return Neuron(weights: weights, bias: bias)
+            let weights = weightInitStrategy.weights(inputCount: inputCount, outputCount: neuronCount)
+            return Neuron(weights: weights, bias: 0)
         }
     }
 

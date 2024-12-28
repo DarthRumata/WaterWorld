@@ -14,8 +14,6 @@ class WaterContainer: SKSpriteNode {
         let boundaryRect = CGRect(x: 0, y: 0, width: size.width, height: size.height)
         physicsBody = SKPhysicsBody(edgeLoopFrom: boundaryRect)
         physicsBody?.categoryBitMask = PhysicsCategory.boundary
-        physicsBody?.collisionBitMask = PhysicsCategory.organism
-        physicsBody?.contactTestBitMask = PhysicsCategory.organism
         physicsBody?.isDynamic = false // Boundaries should not move
     }
 

@@ -6,5 +6,11 @@
 //
 
 protocol BrainProtocol: Actor {
+    var neuralNetwork: NeuralNetwork? { get }
+    
     func calculateResponse(on input: SensorInput) async -> OrganismModel.Action
+}
+
+extension BrainProtocol {
+    var neuralNetwork: NeuralNetwork? { nil }
 }

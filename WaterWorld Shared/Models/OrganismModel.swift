@@ -35,6 +35,17 @@ actor OrganismModel: Equatable {
             self.actionContinuation = continuation
         }
     }
+    var inputsPublisher: AsyncStream<SensorInput> {
+        AsyncStream { continuation in
+            self.inputsContinuation = continuation
+        }
+    }
+    
+    var neuralNetwork: NeuralNetwork? {
+        get async {
+            await brain.neuralNetwork
+        }
+    }
     
     // Private State
     
@@ -48,6 +59,7 @@ actor OrganismModel: Equatable {
     // Triggers
     
     private var actionContinuation: AsyncStream<Action>.Continuation?
+    private var inputsContinuation: AsyncStream<SensorInput>.Continuation?
     
     // Handlers
     
@@ -87,6 +99,7 @@ actor OrganismModel: Equatable {
         energy -= GlobalConstants.idleEnergyLoss
         gainEnergy(fromLightLevel: input.lightLevel)
         
+        inputsContinuation?.yield(input)
         await calculateNextAction(input: input)
     }
     
@@ -119,9 +132,9 @@ actor OrganismModel: Equatable {
         
         Task {
             await tracker.track(action: action, dayProgress: input.dayProgress)
-            await logger.log(
-                message: "t: \(input.dayProgress.formatted()) action: \(action), energy: \(energy)"
-            )
+//            await logger.log(
+//                message: "t: \(input.dayProgress.formatted()) action: \(action), energy: \(energy)"
+//            )
         }
     }
     

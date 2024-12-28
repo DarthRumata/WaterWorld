@@ -33,7 +33,13 @@
 				Models/OrganismModel.swift,
 				Models/SensorInput.swift,
 				UI/CustomPopoverNode.swift,
+				UI/MainView.swift,
 				UI/Organism.swift,
+				UI/OrganismPopover/LayerView.swift,
+				UI/OrganismPopover/NeuralNetworkView.swift,
+				UI/OrganismPopover/NeuronView.swift,
+				UI/OrganismPopover/OrganismPopover.swift,
+				UI/SpriteKitContainer.swift,
 				UI/UIPanel.swift,
 				UI/WaterContainer.swift,
 				Utils/EnergyCalculator.swift,
@@ -190,7 +196,6 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSMainStoryboardFile = Main;
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -220,7 +225,6 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSMainStoryboardFile = Main;
 				INFOPLIST_KEY_NSPrincipalClass = NSApplication;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

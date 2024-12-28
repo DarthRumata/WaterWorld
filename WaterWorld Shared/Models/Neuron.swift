@@ -7,7 +7,7 @@
 
 import Foundation
 
-class Neuron {
+struct Neuron: Sendable {
     let weights: [Double]
     let bias: Double
 

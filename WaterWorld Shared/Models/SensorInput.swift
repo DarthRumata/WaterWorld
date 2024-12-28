@@ -12,4 +12,13 @@ struct SensorInput: Equatable, Sendable {
     let depth: Double
     let dayProgress: Double
     let energy: Double
+
+    var normalized: [Double] {
+        [
+            lightLevel / GlobalConstants.maxLightLevel,
+            depth / GlobalConstants.maxDepth,
+            energy / GlobalConstants.maxEnergy,
+            dayProgress
+        ]
+    }
 }

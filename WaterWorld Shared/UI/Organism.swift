@@ -14,10 +14,6 @@ enum PhysicsCategory {
     // Add other categories if needed
 }
 
-private enum Constants {
-    static let movementPace: CGFloat = 40
-}
-
 class Organism: SKNode {
     var id: UUID {
         model.id
@@ -62,7 +58,7 @@ class Organism: SKNode {
         physics.allowsRotation = false
         physics.affectedByGravity = false
         physics.friction = 0.1
-        physics.restitution = 0.1
+        physics.restitution = 0.5
         physics.linearDamping = 0.1
         physics.mass = 1
         physics.isDynamic = true
@@ -91,15 +87,18 @@ class Organism: SKNode {
 
     func moveUp() {
         Task {
-            await move(by: CGPoint(x: model.direction.rawValue * Constants.movementPace, y: Constants.movementPace))
+            await move(by: CGPoint(
+                x: model.direction.rawValue * GlobalConstants.movementPace,
+                y: GlobalConstants.movementPace
+            ))
         }
     }
 
     func moveDown() {
         Task {
             await move(by: CGPoint(
-                x: model.direction.rawValue * Constants.movementPace,
-                y: -Constants.movementPace
+                x: model.direction.rawValue * GlobalConstants.movementPace,
+                y: -GlobalConstants.movementPace
             ))
         }
     }

@@ -6,22 +6,19 @@
 //
 
 actor NeuralBrain: BrainProtocol {
-    let neuralNetwork = NeuralNetwork(
+    var neuralNetwork: NeuralNetwork? {
+        network
+    }
+    let network = NeuralNetwork(
         inputSize: 4,
         hiddenLayerSizes: [4],
         outputSize: 3,
-        weightRange: -1...1,
-        biasRange: -1...1
+        weightInitStrategy: .uniformXavier
     )
     
     func calculateResponse(on input: SensorInput) async -> OrganismModel.Action {
-        let inputs = [
-            input.lightLevel / GlobalConstants.maxLightLevel,
-            input.depth / GlobalConstants.maxDepth,
-            input.energy / GlobalConstants.maxEnergy,
-            input.dayProgress
-        ]
-        let actionStimuli = neuralNetwork.predict(inputs: inputs)
+        let inputs = input.normalized
+        let actionStimuli = network.predict(inputs: inputs)
         
         var bestStimulusIndex = 0
         var maxStimulus = Double.leastNormalMagnitude
