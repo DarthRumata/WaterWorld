@@ -16,6 +16,11 @@ class UniqueNameGenerator {
     }
     
     func regenerate() {
+        // Clear previously generated names to avoid duplicates when the
+        // generator is reset. Without clearing the pool the list would grow
+        // indefinitely on every call to `regenerate()`.
+        namePool.removeAll()
+
         // Precompute all possible names (2–4 syllables)
         for syllableCount in 2...4 {
             generateCombinations(from: syllables, length: syllableCount)
