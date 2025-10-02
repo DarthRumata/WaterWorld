@@ -14,6 +14,7 @@ struct NeuralNetworkViewModel {
 
 struct NeuralLayerViewModel {
     let neurons: [NeuronViewModel]
+    let activation: Activation
 }
 
 struct NeuralNetworkView: View {
@@ -43,7 +44,7 @@ struct NeuralNetworkView: View {
                         InputsView(inputs: viewModel.inputs)
 
                         ForEach(Array(zip(viewModel.layers, viewModel.layers.indices)), id: \.1) { layer, layerIndex in
-                            LayerView(neurons: layer.neurons, layerIndex: layerIndex)
+                            LayerView(neurons: layer.neurons, activation: layer.activation, layerIndex: layerIndex)
                         }
 
                         HStack(spacing: 10) {
@@ -79,6 +80,10 @@ struct NeuralNetworkView: View {
 
     // Read from AsyncStream
     private func readFromStream() async {
+        if viewModel == nil {
+            let initial = SensorInput(lightLevel: 0, depth: 0, dayProgress: 0, energy: 0)
+            viewModel = generateViewModel(for: initial)
+        }
         for await input in inputStream {
             viewModel = generateViewModel(for: input)
         }
@@ -90,9 +95,10 @@ struct NeuralNetworkView: View {
 
         for (index, layer) in network.layers.enumerated() {
             let isOutputLayer = index == network.layers.count - 1
+            let activation = layer.activation
             let outputs = layer.computeOutputs(inputs: inputs)
-            let neurons = createNeuronViewModels(for: layer, outputs: outputs, isOutputLayer: isOutputLayer)
-            let layerViewModel = NeuralLayerViewModel(neurons: neurons)
+            let neurons = createNeuronViewModels(for: layer, outputs: outputs, activation: activation, isOutputLayer: isOutputLayer)
+            let layerViewModel = NeuralLayerViewModel(neurons: neurons, activation: activation)
             layerViewModels.append(layerViewModel)
             inputs = neurons.map { $0.output }
         }
@@ -100,15 +106,49 @@ struct NeuralNetworkView: View {
         return NeuralNetworkViewModel(inputs: input, layers: layerViewModels)
     }
 
-    private func createNeuronViewModels(for layer: NeuralLayer, outputs: [Double], isOutputLayer: Bool) -> [NeuronViewModel] {
-        let maxOutputIndex = isOutputLayer ? outputs.indices.max(by: { outputs[$0] < outputs[$1] }) : nil
+    private func createNeuronViewModels(for layer: NeuralLayer, outputs: [Double], activation: Activation, isOutputLayer: Bool) -> [NeuronViewModel] {
+        let maxOutputIndex = outputs.indices.max(by: { outputs[$0] < outputs[$1] })
+        let hiddenSoftmaxThreshold = 1.0 / Double(max(outputs.count, 1))
         return zip(layer.neurons, outputs).enumerated().map { index, neuronAndOutput in
             let (neuron, output) = neuronAndOutput
+
+            // Determine isActive depending on layer role and activation
+            let isActive: Bool
+            if isOutputLayer {
+                // Highlight the argmax for outputs (works well for softmax too)
+                isActive = index == maxOutputIndex
+            } else {
+                switch activation {
+                case .relu:
+                    isActive = output > 0.0
+                case .sigmoid:
+                    isActive = output > 0.5
+                case .softmax:
+                    isActive = output > hiddenSoftmaxThreshold
+                case .linear:
+                    isActive = output > 0.0
+                }
+            }
+
+            // Compute an intensity in 0...1 for visualization
+            let intensity: Double
+            switch activation {
+            case .sigmoid:
+                intensity = max(0.0, min(1.0, output))
+            case .relu:
+                intensity = max(0.0, min(1.0, output))
+            case .softmax:
+                intensity = max(0.0, min(1.0, output))
+            case .linear:
+                intensity = max(0.0, min(1.0, output))
+            }
+
             return NeuronViewModel(
                 weights: neuron.weights,
                 bias: neuron.bias,
                 output: output,
-                isActive: isOutputLayer ? index == maxOutputIndex : output > 0.5
+                isActive: isActive,
+                intensity: intensity
             )
         }
     }

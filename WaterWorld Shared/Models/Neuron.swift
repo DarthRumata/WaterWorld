@@ -16,16 +16,11 @@ struct Neuron: Sendable {
         self.bias = bias
     }
 
-    func activate(inputs: [Double]) -> Double {
+    func weightedSum(inputs: [Double]) -> Double {
         if inputs.count != weights.count {
             fatalError("Previous layer neuron count shoud be equal to quantity of weights in each neuron of the next layer")
         }
         
-        let weightedSum = zip(weights, inputs).map(*).reduce(0, +) + bias
-        return sigmoid(weightedSum)
-    }
-
-    private func sigmoid(_ x: Double) -> Double {
-        return 1 / (1 + exp(-x))
+        return zip(weights, inputs).map(*).reduce(0, +) + bias
     }
 }

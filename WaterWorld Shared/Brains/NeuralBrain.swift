@@ -9,12 +9,10 @@ actor NeuralBrain: BrainProtocol {
     var neuralNetwork: NeuralNetwork? {
         network
     }
-    let network = NeuralNetwork(
-        inputSize: 4,
-        hiddenLayerSizes: [4],
-        outputSize: 3,
-        weightInitStrategy: .uniformXavier
-    )
+    let network = NeuralNetworkBuilder(inputSize: 4)
+        .dense(4, activation: .relu)
+        .dense(3, activation: .softmax)
+        .build(weightInitStrategy: .uniformXavier)
     
     func calculateResponse(on input: SensorInput) async -> OrganismModel.Action {
         let inputs = input.normalized

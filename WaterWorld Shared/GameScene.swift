@@ -26,6 +26,8 @@ class GameScene: SKScene {
     @Published private var dayProgress: Double = 0
     @Published private var gameState: GameState = .stopped
     
+    @Published private var simulationMode: SimulationMode = .normal
+    
     // UI
     
     private var uiPanel: UIPanel?
@@ -49,6 +51,9 @@ class GameScene: SKScene {
     // Tasks
     
     private var notificationTask: Task<Void, Error>?
+    
+    private var learningCycleStartDay: Int? = nil
+    private let learningCycleLengthDays: Int = 10
 
     class func newGameScene() -> GameScene {
         // Load 'GameScene.sks' as an SKScene.
@@ -104,6 +109,11 @@ class GameScene: SKScene {
         // Update positions of UI elements if necessary
         uiPanel?.update(withSceneSize: size)
         container?.update(sceneSize: size)
+        
+        // Re-apply bounds constraints to organisms after size change
+        for organism in organisms.values {
+            applyBoundsConstraint(to: organism)
+        }
     }
     
     // Create UI
@@ -116,17 +126,18 @@ class GameScene: SKScene {
         addContainer()
         addPopoverNode()
         
-        $lightLevel
-            .map { lightLevel in
-                if lightLevel == 0 {
-                    return SKColor(white: 0, alpha: 1)
-                }
-                let brightness = 0.1 + (lightLevel / GlobalConstants.maxLightLevel) * 0.9 // Brightness from 0.2 to 1.0
-                let color = SKColor(hue: 0.1667, saturation: 1, brightness: brightness, alpha: 1.0)
-                
-                return color
+        $dayProgress
+            .map { progress -> SKColor in
+                return DayNightStyler.skyColor(for: progress)
             }
             .assign(to: \.backgroundColor, on: self)
+            .store(in: &cancellables)
+
+        $dayProgress
+            .sink { [weak self] progress in
+                guard let self else { return }
+                self.container.color = DayNightStyler.waterColor(for: progress)
+            }
             .store(in: &cancellables)
     }
     
@@ -138,6 +149,7 @@ class GameScene: SKScene {
             lightLevel: $lightLevel.eraseToAnyPublisher(),
             dayProgress: $dayProgress.eraseToAnyPublisher(),
             gameState: $gameState.eraseToAnyPublisher(),
+            simulationMode: $simulationMode.eraseToAnyPublisher(),
             onTapRestartButton: { [weak self] in
                 self?.restartSimulation()
             },
@@ -163,6 +175,9 @@ class GameScene: SKScene {
                 if self.gameState == .paused {
                     cancelCurrentUpdate()
                 }
+            },
+            onTapToggleMode: { [weak self] in
+                self?.toggleSimulationMode()
             }
         )
         
@@ -216,6 +231,7 @@ class GameScene: SKScene {
             organisms[model.id] = organism
             organismModels[model.id] = model
             container.addChild(organism)
+            applyBoundsConstraint(to: organism)
         }
     }
     
@@ -227,19 +243,7 @@ class GameScene: SKScene {
         }
     }
     
-    // MARK: Control state
-    
-    private func restartSimulation() {
-        // Stop updates
-        gameState = .stopped
-
-        cancelCurrentUpdate()
-        
-        // Reset variables
-        totalTime = 0.0
-        dayCount = 0
-        lightLevel = 0
-        
+    private func resetOrganismsPopulation() {
         // Remove existing organisms
         for (_, organism) in organisms {
             organism.removeFromParent()
@@ -247,12 +251,53 @@ class GameScene: SKScene {
         organismModels.removeAll()
         organisms.removeAll()
         
+        // Regenerate names and repopulate
         nameGenerator.regenerate()
-        
-        // Add new organisms
         addOrganisms()
+    }
+    
+    private func resetPopulationForLearningCycle() {
+        // Keep simulation running but cancel any in-flight notifications
+        cancelCurrentUpdate()
         
+        resetOrganismsPopulation()
+        
+        // Continue the learning cycles from the current day
+        let currentDay = Int(totalTime) / Int(GlobalConstants.dayDuration)
+        learningCycleStartDay = currentDay
+    }
+    
+    // MARK: Control state
+    
+    private func restartSimulation() {
+        // Stop updates
+        gameState = .stopped
+
+        cancelCurrentUpdate()
+
+        // Reset organisms only (preserve totalTime and derived counters)
+        resetOrganismsPopulation()
+
+        // Resume
         gameState = .active
+
+        if simulationMode == .learning {
+            let currentDay = Int(totalTime) / Int(GlobalConstants.dayDuration)
+            learningCycleStartDay = currentDay
+        }
+    }
+    
+    private func toggleSimulationMode() {
+        switch simulationMode {
+        case .normal:
+            simulationMode = .learning
+            if gameState == .active {
+                learningCycleStartDay = dayCount
+            }
+        case .learning:
+            simulationMode = .normal
+            learningCycleStartDay = nil
+        }
     }
     
     // MARK: State updates
@@ -277,27 +322,52 @@ class GameScene: SKScene {
         physicsWorld.speed = simulationSpeed
         dayCount = Int(totalTime) / Int(GlobalConstants.dayDuration)
         
+        if simulationMode == .learning {
+            if let startDay = learningCycleStartDay, dayCount - startDay >= learningCycleLengthDays {
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    await self.finishCurrentLearningEpisode()
+                    self.resetPopulationForLearningCycle()
+                }
+            }
+        }
+        
         notifyOrganisms()
+    }
+    
+    private func finishCurrentLearningEpisode() async {
+        for model in organismModels.values {
+            await model.finishEpisodeSurvived()
+        }
     }
     
     private func notifyOrganisms() {
         notificationTask = Task {
             try Task.checkCancellation()
             
-            for (i, model) in organismModels.values.enumerated() {
+            // Snapshot models to avoid mutation during iteration
+            let models = Array(self.organismModels.values)
+            
+            for (i, model) in models.enumerated() {
                 try Task.checkCancellation()
                 
-                guard let view = organisms[model.id] else {
-                    print("\(i):Model \(model.id) should always pair with view")
-                    return
+                // Night-time predator event: 5% chance per organism
+                if self.dayProgress >= 0.5, Double.random(in: 0..<1) < 0.05 {
+                    await model.kill()
+                    continue
                 }
-                view.speed = simulationSpeed
-                let depth = normalizedDepth(for: view)
-                let lightLevel = lightLevel(atDepth: depth)
+                
+                guard let view = self.organisms[model.id] else {
+                    print("\(i):Model \(model.id) should always pair with view")
+                    continue
+                }
+                view.speed = self.simulationSpeed
+                let depth = self.normalizedDepth(for: view)
+                let lightLevel = self.lightLevel(atDepth: depth)
                 let input = await SensorInput(
                     lightLevel: lightLevel,
                     depth: depth,
-                    dayProgress: dayProgress,
+                    dayProgress: self.dayProgress,
                     energy: model.energy
                 )
                 await model.handleChanges(input)
@@ -349,11 +419,27 @@ class GameScene: SKScene {
     
     private func clampOrganismPositions() {
         for organism in organisms.values {
-            let organismRadius = organism.frame.width
+            let organismRadius = organism.frame.width / 2
             let clampedX = max(organismRadius, min(organism.position.x, container.size.width - organismRadius))
             let clampedY = max(organismRadius, min(organism.position.y, container.size.height - organismRadius))
             organism.position = CGPoint(x: clampedX, y: clampedY)
         }
+    }
+
+    private func applyBoundsConstraint(to organism: Organism) {
+        // Ensure constraints match the current container size and organism radius
+        let radius = organism.frame.width / 2
+        let minX = radius
+        let maxX = max(radius, container.size.width - radius)
+        let minY = radius
+        let maxY = max(radius, container.size.height - radius)
+
+        let xRange = SKRange(lowerLimit: minX, upperLimit: maxX)
+        let yRange = SKRange(lowerLimit: minY, upperLimit: maxY)
+
+        let xConstraint = SKConstraint.positionX(xRange)
+        let yConstraint = SKConstraint.positionY(yRange)
+        organism.constraints = [xConstraint, yConstraint]
     }
 }
 
@@ -396,3 +482,4 @@ extension GameScene {
     }
 }
 #endif
+

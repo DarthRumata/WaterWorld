@@ -12,6 +12,8 @@ private enum Constants {
     static let panelHeight: CGFloat = 200
     static let backgroundColor = SKColor(white: 0.9, alpha: 0.7)
     static let textColor = SKColor(white: 0.1, alpha: 1)
+    static let timelineHeight: CGFloat = 6
+    static let timelineWidth: CGFloat = 360
 }
 
 class UIPanel: SKNode {
@@ -30,11 +32,24 @@ class UIPanel: SKNode {
     private var decreaseSpeedButton: SKLabelNode!
     private var pauseButton: SKLabelNode!
     
+    // Mode Controls
+    private var modeLabel: SKLabelNode!
+    private var modeToggleButton: SKLabelNode!
+    
+    // Day/Night timeline UI
+    private var timelineBar: SKShapeNode!
+    private var sunNode: SKShapeNode!
+    private var moonNode: SKShapeNode!
+    private var starsNode: SKNode!
+    private var timelineFrame: CGRect = .zero
+    private var currentDayProgress: CGFloat = 0
+    
     // Actions
     let onTapRestartButton: () -> Void
     let onTapIncreaseSpeed: () -> Void
     let onTapDecreaseSpeed: () -> Void
     let onTapPause: () -> Void
+    let onTapToggleMode: () -> Void
     
     // Combine
     private var cancellables = Set<AnyCancellable>()
@@ -46,10 +61,12 @@ class UIPanel: SKNode {
         lightLevel: AnyPublisher<Double, Never>,
         dayProgress: AnyPublisher<Double, Never>,
         gameState: AnyPublisher<GameState, Never>,
+        simulationMode: AnyPublisher<SimulationMode, Never>,
         onTapRestartButton: @escaping () -> Void,
         onTapIncreaseSpeed: @escaping () -> Void,
         onTapDecreaseSpeed: @escaping () -> Void,
-        onTapPause: @escaping () -> Void
+        onTapPause: @escaping () -> Void,
+        onTapToggleMode: @escaping () -> Void
     ) {
         let border = SKShapeNode()
         border.position = CGPoint(x: 0, y: 0)
@@ -62,6 +79,7 @@ class UIPanel: SKNode {
         self.onTapIncreaseSpeed = onTapIncreaseSpeed
         self.onTapDecreaseSpeed = onTapDecreaseSpeed
         self.onTapPause = onTapPause
+        self.onTapToggleMode = onTapToggleMode
         
         super.init()
         
@@ -75,6 +93,8 @@ class UIPanel: SKNode {
         addRestartLabel()
         addSpeedLabel()
         addPauseButton()
+        addTimeline()
+        addModeControls()
         
         organismsCount
             .map {
@@ -119,11 +139,25 @@ class UIPanel: SKNode {
             .assign(to: \.text, on: timeLabel)
             .store(in: &cancellables)
         
+        dayProgress
+            .sink { [weak self] progress in
+                guard let self else { return }
+                let p = CGFloat(progress)
+                self.currentDayProgress = p
+                self.updateTimeline(progress: p)
+            }
+            .store(in: &cancellables)
+        
         gameState
             .sink { [pauseButton] state in
                 pauseButton?.fontColor = state == .stopped ? .gray : Constants.textColor
                 pauseButton?.text = state == .active ? "Pause" : "Resume"
             }
+            .store(in: &cancellables)
+        
+        simulationMode
+            .map { $0 == .normal ? "Mode: Normal" : "Mode: Learning" }
+            .assign(to: \.text, on: modeLabel)
             .store(in: &cancellables)
     }
     
@@ -144,6 +178,11 @@ class UIPanel: SKNode {
         increaseSpeedButton.position = CGPoint(x: speedLabel.position.x + 70, y: Constants.panelHeight - 40)
         decreaseSpeedButton.position = CGPoint(x: speedLabel.position.x - 70, y: Constants.panelHeight - 40)
         pauseButton.position = CGPoint(x: speedLabel.position.x, y: Constants.panelHeight - 140)
+        modeLabel.position = CGPoint(x: size.width - 150, y: Constants.panelHeight - 170)
+        modeToggleButton.position = CGPoint(x: size.width - 150, y: Constants.panelHeight - 190)
+        
+        updateTimelineLayout(size: size)
+        updateTimeline(progress: currentDayProgress)
     }
     
     // Left
@@ -230,6 +269,125 @@ class UIPanel: SKNode {
         addChild(pauseButton)
     }
     
+    private func addModeControls() {
+        modeLabel = SKLabelNode(fontNamed: "Helvetica")
+        modeLabel.fontSize = 18
+        modeLabel.fontColor = Constants.textColor
+        modeLabel.zPosition = 100
+        modeLabel.horizontalAlignmentMode = .left
+        modeLabel.verticalAlignmentMode = .bottom
+        addChild(modeLabel)
+        
+        modeToggleButton = SKLabelNode(fontNamed: "Helvetica")
+        modeToggleButton.fontSize = 18
+        modeToggleButton.fontColor = Constants.textColor
+        modeToggleButton.zPosition = 100
+        modeToggleButton.text = "Switch Mode"
+        modeToggleButton.horizontalAlignmentMode = .left
+        modeToggleButton.verticalAlignmentMode = .bottom
+        addChild(modeToggleButton)
+    }
+    
+    private func addTimeline() {
+        // Timeline bar
+        timelineBar = SKShapeNode()
+        timelineBar.fillColor = .clear
+        timelineBar.strokeColor = Constants.textColor.withAlphaComponent(0.6)
+        timelineBar.lineWidth = Constants.timelineHeight
+        timelineBar.zPosition = 100
+        addChild(timelineBar)
+
+        // Sun node
+        sunNode = SKShapeNode(circleOfRadius: 8)
+        sunNode.fillColor = SKColor(hue: 0.13, saturation: 0.9, brightness: 1.0, alpha: 1)
+        sunNode.strokeColor = .clear
+        sunNode.glowWidth = 4
+        sunNode.zPosition = 101
+        addChild(sunNode)
+
+        // Moon node
+        moonNode = SKShapeNode(circleOfRadius: 7)
+        moonNode.fillColor = SKColor(hue: 0.6, saturation: 0.1, brightness: 0.95, alpha: 1)
+        moonNode.strokeColor = .clear
+        moonNode.glowWidth = 2
+        moonNode.alpha = 0
+        moonNode.zPosition = 101
+        addChild(moonNode)
+
+        // Stars container
+        starsNode = SKNode()
+        starsNode.zPosition = 100
+        starsNode.alpha = 0
+        addChild(starsNode)
+    }
+    
+    private func updateTimelineLayout(size: CGSize) {
+        // Center the timeline horizontally in the panel, near the bottom
+        let width = min(Constants.timelineWidth, size.width * 0.8)
+        let centerX = size.width / 2
+        let centerY: CGFloat = 30 // 30pt from bottom of panel
+        let start = CGPoint(x: centerX - width / 2, y: centerY)
+        let end =   CGPoint(x: centerX + width / 2, y: centerY)
+
+        // Store frame for later mapping
+        timelineFrame = CGRect(x: start.x, y: centerY - Constants.timelineHeight / 2, width: width, height: Constants.timelineHeight)
+
+        // Update timeline bar path
+        let path = CGMutablePath()
+        path.move(to: start)
+        path.addLine(to: end)
+        timelineBar.path = path
+
+        // (Re)generate stars if empty, and position within an area above the bar
+        if starsNode.children.isEmpty {
+            let starCount = 24
+            for _ in 0..<starCount {
+                let star = SKShapeNode(circleOfRadius: 1.5)
+                star.fillColor = SKColor(white: 1.0, alpha: 0.9)
+                star.strokeColor = .clear
+                star.zPosition = 100
+                starsNode.addChild(star)
+            }
+        }
+        // Position stars randomly within a band above the timeline
+        let starBand = CGRect(x: timelineFrame.minX, y: timelineFrame.minY + 10, width: timelineFrame.width, height: 30)
+        for star in starsNode.children {
+            let rx = CGFloat.random(in: starBand.minX...starBand.maxX)
+            let ry = CGFloat.random(in: starBand.minY...starBand.maxY)
+            star.position = CGPoint(x: rx, y: ry)
+        }
+    }
+
+    private func updateTimeline(progress p: CGFloat) {
+        guard timelineFrame.width > 0 else { return }
+
+        let startX = timelineFrame.minX
+        let endX = timelineFrame.maxX
+        let y = timelineFrame.midY
+
+        // Night factor: 0 at sunset (0.5), 1 at midnight (0.75), remains 1 until sunrise then fades
+        let nightFactor = max(0, min((p - 0.5) * 2, 1))
+        starsNode.alpha = nightFactor
+
+        if p <= 0.5 {
+            // Sun travels left -> right during day
+            let t = p / 0.5 // 0..1
+            let x = startX + (endX - startX) * t
+            sunNode.alpha = 1
+            sunNode.position = CGPoint(x: x, y: y)
+
+            moonNode.alpha = 0
+        } else {
+            // Moon travels left -> right during night
+            let t = (p - 0.5) / 0.5 // 0..1
+            let x = startX + (endX - startX) * t
+            moonNode.alpha = 1
+            moonNode.position = CGPoint(x: x, y: y)
+
+            sunNode.alpha = 0
+        }
+    }
+    
     override func mouseDown(with event: NSEvent) {
         let location = event.location(in: self)
         let nodesAtPoint = nodes(at: location)
@@ -242,6 +400,9 @@ class UIPanel: SKNode {
             onTapDecreaseSpeed()
         } else if nodesAtPoint.contains(pauseButton) {
             onTapPause()
+        } else if nodesAtPoint.contains(modeToggleButton) {
+            onTapToggleMode()
         }
     }
 }
+

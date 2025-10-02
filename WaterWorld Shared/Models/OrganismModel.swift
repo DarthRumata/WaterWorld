@@ -36,8 +36,11 @@ actor OrganismModel: Equatable {
         }
     }
     var inputsPublisher: AsyncStream<SensorInput> {
-        AsyncStream { continuation in
+        AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             self.inputsContinuation = continuation
+            if let lastInput {
+                continuation.yield(lastInput)
+            }
         }
     }
     
@@ -51,6 +54,7 @@ actor OrganismModel: Equatable {
     
     @Published private(set) var energy = GlobalConstants.maxEnergy
     private var isBusy = false
+    private var lastInput: SensorInput? = nil
     
     private var isDead: Bool {
         energy <= 0
@@ -98,7 +102,7 @@ actor OrganismModel: Equatable {
         
         energy -= GlobalConstants.idleEnergyLoss
         gainEnergy(fromLightLevel: input.lightLevel)
-        
+        lastInput = input
         inputsContinuation?.yield(input)
         await calculateNextAction(input: input)
     }
@@ -107,11 +111,21 @@ actor OrganismModel: Equatable {
         isBusy = busy
     }
     
+    func kill() {
+        if isDead { return }
+        energy = 0
+    }
+    
+    func finishEpisodeSurvived() async {
+        await brain.finishEpisode(didDie: false)
+    }
+    
     // Private logic
     
     private func observeEnergyChanges() async {
         for await energyValue in $energy.values {
             if energyValue <= 0 {
+                await brain.finishEpisode(didDie: true)
                 await onDeath(self)
                 await tracker.reportGatheredStatistics(forName: name)
                 break
@@ -163,3 +177,4 @@ extension OrganismModel.Action: CustomDebugStringConvertible {
         }
     }
 }
+

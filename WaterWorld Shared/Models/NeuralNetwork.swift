@@ -7,6 +7,13 @@
 
 import Foundation
 
+enum Activation: Sendable {
+    case sigmoid
+    case relu
+    case softmax
+    case linear
+}
+
 enum InitializationStrategy {
     case uniformXavier
     case uniform
@@ -32,30 +39,36 @@ struct NeuralNetwork: Sendable {
         var previousSize = inputSize
         var allLayers: [NeuralLayer] = []
 
-        // Create hidden layers
+        // Create hidden layers (default activation: sigmoid)
         for size in hiddenLayerSizes {
             allLayers.append(
                 NeuralLayer(
                     neuronCount: size,
                     inputCount: previousSize,
-                    weightInitStrategy: weightInitStrategy
+                    weightInitStrategy: weightInitStrategy,
+                    activation: .sigmoid
                 )
             )
             previousSize = size
         }
 
-        // Create output layer
+        // Create output layer (default activation: sigmoid)
         allLayers.append(
             NeuralLayer(
                 neuronCount: outputSize,
                 inputCount: previousSize,
-                weightInitStrategy: weightInitStrategy
+                weightInitStrategy: weightInitStrategy,
+                activation: .sigmoid
             )
         )
         
         layers = allLayers
     }
 
+    init(layers: [NeuralLayer]) {
+        self.layers = layers
+    }
+    
     // Forward pass for the network
     func predict(inputs: [Double]) -> [Double] {
         return layers.reduce(inputs) { currentInputs, layer in
@@ -66,10 +79,11 @@ struct NeuralNetwork: Sendable {
 
 struct NeuralLayer: Sendable {
     let neurons: [Neuron]
+    let activation: Activation
 
-    init(neuronCount: Int, inputCount: Int, weightInitStrategy: InitializationStrategy) {
+    init(neuronCount: Int, inputCount: Int, weightInitStrategy: InitializationStrategy, activation: Activation) {
+        self.activation = activation
         neurons = (0..<neuronCount).map { _ in
-            // Create each neuron with random weights and biases
             let weights = weightInitStrategy.weights(inputCount: inputCount, outputCount: neuronCount)
             return Neuron(weights: weights, bias: 0)
         }
@@ -77,6 +91,19 @@ struct NeuralLayer: Sendable {
 
     // Forward pass for the layer
     func computeOutputs(inputs: [Double]) -> [Double] {
-        neurons.map { $0.activate(inputs: inputs) }
+        let zs = neurons.map { $0.weightedSum(inputs: inputs) }
+        switch activation {
+        case .sigmoid:
+            return zs.map { 1.0 / (1.0 + exp(-$0)) }
+        case .relu:
+            return zs.map { max(0.0, $0) }
+        case .softmax:
+            let maxZ = zs.max() ?? 0.0
+            let exps = zs.map { exp($0 - maxZ) }
+            let sumExp = exps.reduce(0.0, +)
+            return exps.map { $0 / (sumExp == 0 ? 1 : sumExp) }
+        case .linear:
+            return zs
+        }
     }
 }

@@ -11,10 +11,15 @@ struct NeuronViewModel {
     let bias: Double
     let output: Double
     let isActive: Bool
+    let intensity: Double
 }
 
 struct NeuronView: View {
     let neuron: NeuronViewModel
+
+    private var circleBrightness: Double { 0.3 + 0.7 * neuron.intensity }
+    private var circleColor: Color { Color(hue: 0.33, saturation: 0.8, brightness: circleBrightness) }
+    private var valueTextColor: Color { circleBrightness > 0.6 ? .black : .white }
 
     var body: some View {
         HStack(spacing: 5) {
@@ -32,7 +37,7 @@ struct NeuronView: View {
             }
             // Activation circle
             Circle()
-                .fill(neuron.isActive ? Color.green : Color.gray)
+                .fill(circleColor)
                 .frame(width: 30, height: 30)
                 .overlay(
                     Circle()
@@ -42,8 +47,9 @@ struct NeuronView: View {
                     let style = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(2))
                     let value = style.format(neuron.output)
                     Text(value)
+                        .foregroundColor(valueTextColor)
                 }
-                .animation(.easeInOut(duration: 0.3), value: neuron.isActive)
+                .animation(.easeInOut(duration: 0.25), value: neuron.intensity)
         }
     }
 }
