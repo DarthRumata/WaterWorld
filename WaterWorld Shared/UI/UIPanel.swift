@@ -31,10 +31,14 @@ class UIPanel: SKNode {
     private var increaseSpeedButton: SKLabelNode!
     private var decreaseSpeedButton: SKLabelNode!
     private var pauseButton: SKLabelNode!
+    private var reportButton: SKLabelNode!
     
-    // Mode Controls
-    private var modeLabel: SKLabelNode!
-    private var modeToggleButton: SKLabelNode!
+    // Mode selector (segmented) and Predators intensity selector
+    private var modeSelector: SegmentedControlNode!
+    private var predatorsIntensitySelector: SegmentedControlNode!
+
+    // Local state to coordinate UI actions
+    private var currentMode: SimulationMode = .normal
     
     // Day/Night timeline UI
     private var timelineBar: SKShapeNode!
@@ -49,7 +53,9 @@ class UIPanel: SKNode {
     let onTapIncreaseSpeed: () -> Void
     let onTapDecreaseSpeed: () -> Void
     let onTapPause: () -> Void
+    let onTapReport: () -> Void
     let onTapToggleMode: () -> Void
+    let onSelectPredatorIntensity: (PredatorsIntensity) -> Void
     
     // Combine
     private var cancellables = Set<AnyCancellable>()
@@ -62,11 +68,14 @@ class UIPanel: SKNode {
         dayProgress: AnyPublisher<Double, Never>,
         gameState: AnyPublisher<GameState, Never>,
         simulationMode: AnyPublisher<SimulationMode, Never>,
+        predatorsIntensity: AnyPublisher<PredatorsIntensity, Never>,
         onTapRestartButton: @escaping () -> Void,
         onTapIncreaseSpeed: @escaping () -> Void,
         onTapDecreaseSpeed: @escaping () -> Void,
         onTapPause: @escaping () -> Void,
-        onTapToggleMode: @escaping () -> Void
+        onTapReport: @escaping () -> Void,
+        onTapToggleMode: @escaping () -> Void,
+        onSelectPredatorIntensity: @escaping (PredatorsIntensity) -> Void
     ) {
         let border = SKShapeNode()
         border.position = CGPoint(x: 0, y: 0)
@@ -79,7 +88,9 @@ class UIPanel: SKNode {
         self.onTapIncreaseSpeed = onTapIncreaseSpeed
         self.onTapDecreaseSpeed = onTapDecreaseSpeed
         self.onTapPause = onTapPause
+        self.onTapReport = onTapReport
         self.onTapToggleMode = onTapToggleMode
+        self.onSelectPredatorIntensity = onSelectPredatorIntensity
         
         super.init()
         
@@ -93,34 +104,35 @@ class UIPanel: SKNode {
         addRestartLabel()
         addSpeedLabel()
         addPauseButton()
+        addReportButton()
         addTimeline()
         addModeControls()
-        
-        organismsCount
-            .map {
-                "Organisms: \($0)"
+        modeSelector.onSelectIndex = { [weak self] idx in
+            guard let self else { return }
+            let desired: SimulationMode = (idx == 0) ? .normal : .learning
+            if self.currentMode != desired {
+                self.onTapToggleMode()
             }
+        }
+        addPredatorsIntensityControl()
+
+        organismsCount
+            .map { "Org: \($0)" }
             .assign(to: \.text, on: organismCountLabel)
             .store(in: &cancellables)
         
         daysCount
-            .map {
-                "Days: \($0)"
-            }
+            .map { "Day: \($0)" }
             .assign(to: \.text, on: dayCountLabel)
             .store(in: &cancellables)
         
         speed
-            .map {
-                "Speed: \($0)"
-            }
+            .map { String(format: "Spd: x%.1f", $0) }
             .assign(to: \.text, on: speedLabel)
             .store(in: &cancellables)
         
         lightLevel
-            .map {
-                "Light Level: \(String(format: "%.2f", $0))"
-            }
+            .map { String(format: "Light: %.1f", $0) }
             .assign(to: \.text, on: lightLevelLabel)
             .store(in: &cancellables)
         
@@ -133,8 +145,7 @@ class UIPanel: SKNode {
                 let reminder = hours - wholeHours
                 let minutes = Int(60 * reminder)
                 
-                
-                return "Time: \(String(format: "%02d", correctedHours)):\(String(format: "%02d", minutes))"
+                return "T: \(String(format: "%02d", correctedHours)):\(String(format: "%02d", minutes))"
             }
             .assign(to: \.text, on: timeLabel)
             .store(in: &cancellables)
@@ -156,8 +167,19 @@ class UIPanel: SKNode {
             .store(in: &cancellables)
         
         simulationMode
-            .map { $0 == .normal ? "Mode: Normal" : "Mode: Learning" }
-            .assign(to: \.text, on: modeLabel)
+            .sink { [weak self] mode in
+                guard let self else { return }
+                self.currentMode = mode
+                let idx = (mode == .normal) ? 0 : 1
+                self.modeSelector?.setSelectedIndex(idx, animated: true)
+            }
+            .store(in: &cancellables)
+        
+        predatorsIntensity
+            .sink { [weak self] intensity in
+                let idx = intensity.rawValue
+                self?.predatorsIntensitySelector?.setSelectedIndex(idx, animated: true)
+            }
             .store(in: &cancellables)
     }
     
@@ -173,14 +195,39 @@ class UIPanel: SKNode {
         organismCountLabel.position = CGPoint(x: 10 , y: Constants.panelHeight - 90)
         lightLevelLabel.position = CGPoint(x: size.width / 2 , y: Constants.panelHeight - 40)
         timeLabel.position = CGPoint(x: size.width / 2 , y: Constants.panelHeight - 90)
-        restartButton.position = CGPoint(x: size.width - 150, y: Constants.panelHeight - 90)
-        speedLabel.position = CGPoint(x: size.width - 150, y: Constants.panelHeight - 40)
-        increaseSpeedButton.position = CGPoint(x: speedLabel.position.x + 70, y: Constants.panelHeight - 40)
-        decreaseSpeedButton.position = CGPoint(x: speedLabel.position.x - 70, y: Constants.panelHeight - 40)
-        pauseButton.position = CGPoint(x: speedLabel.position.x, y: Constants.panelHeight - 140)
-        modeLabel.position = CGPoint(x: size.width - 150, y: Constants.panelHeight - 170)
-        modeToggleButton.position = CGPoint(x: size.width - 150, y: Constants.panelHeight - 190)
         
+        // Right-aligned vertical stack for controls
+        let rightMargin: CGFloat = 16
+        let rightX = size.width - rightMargin
+        var y = Constants.panelHeight - 30
+
+        // Restart (top)
+        restartButton.position = CGPoint(x: rightX, y: y)
+        y -= 24
+
+        // Pause under Restart
+        pauseButton.position = CGPoint(x: rightX, y: y)
+        y -= 28
+
+        reportButton.position = CGPoint(x: rightX, y: y)
+        y -= 28
+
+        // Mode (segmented control) — width 110, align right edge to panel
+        modeSelector.position = CGPoint(x: rightX - 110, y: y - 13)
+        y -= 30
+
+        // Predator intensity selector (fits 160 width)
+        predatorsIntensitySelector.position = CGPoint(x: rightX - 160, y: y - 12)
+        y -= 30
+
+        // Speed label (right-aligned)
+        speedLabel.position = CGPoint(x: rightX, y: y)
+        y -= 22
+        // Arrows on a separate row under the label
+        increaseSpeedButton.position = CGPoint(x: rightX, y: y)
+        decreaseSpeedButton.position = CGPoint(x: rightX - 40, y: y)
+        y -= 24
+
         updateTimelineLayout(size: size)
         updateTimeline(progress: currentDayProgress)
     }
@@ -194,6 +241,7 @@ class UIPanel: SKNode {
         dayCountLabel.horizontalAlignmentMode = .left
         dayCountLabel.verticalAlignmentMode = .bottom
         dayCountLabel.zPosition = 100
+        dayCountLabel.text = "Day: 0"
         addChild(dayCountLabel)
     }
     
@@ -204,7 +252,7 @@ class UIPanel: SKNode {
         organismCountLabel.verticalAlignmentMode = .bottom
         organismCountLabel.fontColor = Constants.textColor
         organismCountLabel.zPosition = 100
-        organismCountLabel.text = "Organisms"
+        organismCountLabel.text = "Org: 0"
         addChild(organismCountLabel)
     }
     
@@ -215,6 +263,7 @@ class UIPanel: SKNode {
         lightLevelLabel.fontSize = 18
         lightLevelLabel.fontColor = Constants.textColor
         lightLevelLabel.zPosition = 100
+        lightLevelLabel.text = "Light: 0.0"
         addChild(lightLevelLabel)
     }
     
@@ -235,6 +284,7 @@ class UIPanel: SKNode {
         restartButton.position = CGPoint(x: 1000, y: Constants.panelHeight - 20)
         restartButton.zPosition = 100
         restartButton.text = "Restart"
+        restartButton.horizontalAlignmentMode = .right
         addChild(restartButton)
     }
 
@@ -242,12 +292,15 @@ class UIPanel: SKNode {
         speedLabel = SKLabelNode(fontNamed: "Helvetica")
         speedLabel.fontSize = 18
         speedLabel.fontColor = Constants.textColor
+        speedLabel.horizontalAlignmentMode = .right
         speedLabel.zPosition = 100
+        speedLabel.text = "Spd: x1.0"
         addChild(speedLabel)
         
         increaseSpeedButton = SKLabelNode(fontNamed: "Helvetica")
         increaseSpeedButton.fontSize = 18
         increaseSpeedButton.fontColor = Constants.textColor
+        increaseSpeedButton.horizontalAlignmentMode = .right
         increaseSpeedButton.zPosition = 100
         increaseSpeedButton.text = "=>"
         addChild(increaseSpeedButton)
@@ -255,6 +308,7 @@ class UIPanel: SKNode {
         decreaseSpeedButton = SKLabelNode(fontNamed: "Helvetica")
         decreaseSpeedButton.fontSize = 18
         decreaseSpeedButton.fontColor = Constants.textColor
+        decreaseSpeedButton.horizontalAlignmentMode = .right
         decreaseSpeedButton.zPosition = 100
         decreaseSpeedButton.text = "<="
         addChild(decreaseSpeedButton)
@@ -266,26 +320,53 @@ class UIPanel: SKNode {
         pauseButton.fontColor = Constants.textColor
         pauseButton.zPosition = 100
         pauseButton.text = "Pause"
+        pauseButton.horizontalAlignmentMode = .right
         addChild(pauseButton)
     }
     
+    private func addReportButton() {
+        reportButton = SKLabelNode(fontNamed: "Helvetica")
+        reportButton.fontSize = 18
+        reportButton.fontColor = Constants.textColor
+        reportButton.zPosition = 100
+        reportButton.text = "Report"
+        reportButton.horizontalAlignmentMode = .right
+        addChild(reportButton)
+    }
+    
     private func addModeControls() {
-        modeLabel = SKLabelNode(fontNamed: "Helvetica")
-        modeLabel.fontSize = 18
-        modeLabel.fontColor = Constants.textColor
-        modeLabel.zPosition = 100
-        modeLabel.horizontalAlignmentMode = .left
-        modeLabel.verticalAlignmentMode = .bottom
-        addChild(modeLabel)
-        
-        modeToggleButton = SKLabelNode(fontNamed: "Helvetica")
-        modeToggleButton.fontSize = 18
-        modeToggleButton.fontColor = Constants.textColor
-        modeToggleButton.zPosition = 100
-        modeToggleButton.text = "Switch Mode"
-        modeToggleButton.horizontalAlignmentMode = .left
-        modeToggleButton.verticalAlignmentMode = .bottom
-        addChild(modeToggleButton)
+        modeSelector = SegmentedControlNode(
+            size: CGSize(width: 110, height: 26),
+            segments: [
+                .init(title: "Normal"),
+                .init(title: "Learning")
+            ],
+            selectedIndex: 0
+        )
+        modeSelector.zPosition = 100
+        addChild(modeSelector)
+    }
+    
+    private func addPredatorsIntensityControl() {
+        predatorsIntensitySelector = SegmentedControlNode(
+            size: CGSize(width: 160, height: 26),
+            segments: [
+                .init(title: "Off"),
+                .init(title: "Low"),
+                .init(title: "Med"),
+                .init(title: "High")
+            ],
+            selectedIndex: 0
+        )
+        predatorsIntensitySelector.zPosition = 100
+        addChild(predatorsIntensitySelector)
+
+        predatorsIntensitySelector.onSelectIndex = { [weak self] idx in
+            guard let self else { return }
+            let all = PredatorsIntensity.allCases
+            guard idx >= 0, idx < all.count else { return }
+            self.onSelectPredatorIntensity(all[idx])
+        }
     }
     
     private func addTimeline() {
@@ -400,9 +481,10 @@ class UIPanel: SKNode {
             onTapDecreaseSpeed()
         } else if nodesAtPoint.contains(pauseButton) {
             onTapPause()
-        } else if nodesAtPoint.contains(modeToggleButton) {
-            onTapToggleMode()
+        } else if nodesAtPoint.contains(reportButton) {
+            onTapReport()
         }
+        // modeSelector handles its own mouseDown, so no need to handle here
     }
 }
 

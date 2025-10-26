@@ -6,6 +6,11 @@
 //
 
 import SwiftUI
+import Foundation
+
+#if os(OSX)
+import AppKit
+#endif
 
 struct NeuralNetworkViewModel {
     let inputs: SensorInput
@@ -24,19 +29,38 @@ struct NeuralNetworkView: View {
     let onTapCloseButton: () -> Void
 
     @State private var viewModel: NeuralNetworkViewModel? = nil
+    @State private var contentSize: CGSize = .zero
+    @State private var lastUIUpdate: TimeInterval = 0
+    private let minUIUpdateInterval: TimeInterval = 0.25
+
+    // Computed layout constraints based on screen and measured content
+    private var screenSize: CGSize {
+#if os(OSX)
+        return NSScreen.main?.visibleFrame.size ?? CGSize(width: 1024, height: 768)
+#else
+        return CGSize(width: 1024, height: 768)
+#endif
+    }
+    private var maxWidth: CGFloat { screenSize.width * 2.0 / 3.0 }
+    private var maxHeight: CGFloat { screenSize.height * 2.0 / 3.0 }
+    private var constrainedWidth: CGFloat? {
+        contentSize.width > 0 ? min(max(0, contentSize.width), maxWidth) : nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                HStack {
-                    Text(name)
-                }
-                .frame(maxWidth: .infinity)
-                
+                Text(name)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                Spacer(minLength: 8)
+
                 CloseButton {
                     onTapCloseButton()
                 }
             }
+            .frame(width: constrainedWidth)
 
             ScrollView([.vertical, .horizontal], showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 25) {
@@ -48,29 +72,29 @@ struct NeuralNetworkView: View {
                         }
 
                         HStack(spacing: 10) {
-                            Spacer() // Add space before the labels start
-                                .frame(width: 70) // Align with the Layer label
-
-                            Text("Up")
-                                .frame(width: 70)
-                                .multilineTextAlignment(.center)
-                                .foregroundColor(.white)
-
-                            Text("Down")
-                                .frame(width: 70)
-                                .multilineTextAlignment(.center)
-                                .foregroundColor(.white)
-
-                            Text("Wait")
-                                .frame(width: 70)
-                                .multilineTextAlignment(.center)
-                                .foregroundColor(.white)
+                            Spacer().frame(width: 70)
+                            Text("Up").frame(width: 70).multilineTextAlignment(.center).foregroundColor(.white)
+                            Text("Down").frame(width: 70).multilineTextAlignment(.center).foregroundColor(.white)
+                            Text("Wait").frame(width: 70).multilineTextAlignment(.center).foregroundColor(.white)
                         }
                         .padding(.leading, 50)
                     }
                 }
                 .padding(15)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear
+                            .preference(key: SizePreferenceKey.self, value: proxy.size)
+                    }
+                )
             }
+            .onPreferenceChange(SizePreferenceKey.self) { newSize in
+                self.contentSize = newSize
+            }
+            .frame(
+                width: constrainedWidth,
+                height: min(max(0, contentSize.height), maxHeight)
+            )
             .background(Color.black.opacity(0.8))
         }
         .task {
@@ -83,9 +107,14 @@ struct NeuralNetworkView: View {
         if viewModel == nil {
             let initial = SensorInput(lightLevel: 0, depth: 0, dayProgress: 0, energy: 0)
             viewModel = generateViewModel(for: initial)
+            lastUIUpdate = Date.timeIntervalSinceReferenceDate
         }
         for await input in inputStream {
-            viewModel = generateViewModel(for: input)
+            let now = Date.timeIntervalSinceReferenceDate
+            if now - lastUIUpdate >= minUIUpdateInterval {
+                viewModel = generateViewModel(for: input)
+                lastUIUpdate = now
+            }
         }
     }
 
@@ -151,6 +180,14 @@ struct NeuralNetworkView: View {
                 intensity: intensity
             )
         }
+    }
+}
+
+private struct SizePreferenceKey: PreferenceKey {
+    static let defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        let next = nextValue()
+        if next != .zero { value = next }
     }
 }
 

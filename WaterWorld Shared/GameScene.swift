@@ -8,6 +8,12 @@
 import Combine
 import Foundation
 import SpriteKit
+import CoreGraphics
+
+#if os(OSX)
+import SwiftUI
+import AppKit
+#endif
 
 class GameScene: SKScene {
     // MARK: Callbacks
@@ -27,11 +33,13 @@ class GameScene: SKScene {
     @Published private var gameState: GameState = .stopped
     
     @Published private var simulationMode: SimulationMode = .normal
+    @Published private var predatorsIntensity: PredatorsIntensity = .medium
     
     // UI
     
     private var uiPanel: UIPanel?
     private var container: WaterContainer!
+    private var deathMarkerManager: DeathMarkerManager?
     private var infoPopover: NSPopover?
     private var popoverNode: CustomPopoverNode?
     
@@ -47,6 +55,9 @@ class GameScene: SKScene {
     // Utils
     
     private let nameGenerator = UniqueNameGenerator(syllables: ["ka", "bar", "ma", "lo", "ni", "mek", "ta", "pon", "ger", "du"])
+    private let environment = EnvironmentService()
+    private var predationManager: PredationManager!
+    private var qLearner: QLearner!
     
     // Tasks
     
@@ -78,6 +89,13 @@ class GameScene: SKScene {
         
         setUpScene()
         didChangeSize(size)
+        
+        self.qLearner = QLearner(
+            epsilonGreedy: 0.1,
+            gamma: 0.99,
+            batchSize: 6400,
+            simulationController: self
+        )
     }
     
     override func update(_ currentTime: TimeInterval) {
@@ -124,6 +142,12 @@ class GameScene: SKScene {
         // Create UI
         addUIPanel()
         addContainer()
+        
+        predationManager = PredationManager(intensity: predatorsIntensity)
+        
+        // Init managers
+        deathMarkerManager = DeathMarkerManager(container: container, dayDuration: GlobalConstants.dayDuration)
+        
         addPopoverNode()
         
         $dayProgress
@@ -150,6 +174,7 @@ class GameScene: SKScene {
             dayProgress: $dayProgress.eraseToAnyPublisher(),
             gameState: $gameState.eraseToAnyPublisher(),
             simulationMode: $simulationMode.eraseToAnyPublisher(),
+            predatorsIntensity: $predatorsIntensity.eraseToAnyPublisher(),
             onTapRestartButton: { [weak self] in
                 self?.restartSimulation()
             },
@@ -166,18 +191,20 @@ class GameScene: SKScene {
                 self.simulationSpeed = max(newSpeed, 0.25)
             },
             onTapPause: { [weak self] in
-                guard let self, self.gameState != .stopped else {
-                    return
-                }
-                
-                self.gameState = self.gameState == .active ? .paused : .active
-                
-                if self.gameState == .paused {
-                    cancelCurrentUpdate()
+                guard let self, self.gameState != .stopped else { return }
+                Task {
+                    if self.gameState == .active {
+                        await self.pauseSimulation()
+                    } else if self.gameState == .paused {
+                        await self.resumeSimulation()
+                    }
                 }
             },
-            onTapToggleMode: { [weak self] in
+            onTapReport: { [weak self] in self?.presentQLearningReport() }, onTapToggleMode: { [weak self] in
                 self?.toggleSimulationMode()
+            },
+            onSelectPredatorIntensity: { [weak self] intensity in
+                self?.setPredatorsIntensity(intensity)
             }
         )
         
@@ -207,17 +234,20 @@ class GameScene: SKScene {
             let tracker = OrganismTracker(logger: logger)
             
             let model = OrganismModel(
-                brain: NeuralBrain(),
+                brain: QBrain(qLearner: self.qLearner),
                 name: nameGenerator.generateName() ?? "\(i)",
                 logger: logger,
                 tracker: tracker
-            ) { [weak self] model in
+            ) { @MainActor [weak self] (model: OrganismModel, cause: CauseOfDeath) in
+                guard let self else { return }
                 let id = model.id
-                
-                self?.organismModels.removeValue(forKey: id)
-                let organism = self?.organisms[id]
-                organism?.removeFromParent()
-                self?.organisms.removeValue(forKey: id)
+                if let organism = self.organisms[id] {
+                    let deathPosition = organism.position
+                    self.deathMarkerManager?.addMarker(at: deathPosition, cause: cause)
+                    organism.removeFromParent()
+                }
+                self.organismModels.removeValue(forKey: id)
+                self.organisms.removeValue(forKey: id)
             }
 
             let organism = Organism(
@@ -278,6 +308,14 @@ class GameScene: SKScene {
         // Reset organisms only (preserve totalTime and derived counters)
         resetOrganismsPopulation()
 
+        if simulationMode == .normal {
+            totalTime = 0
+            dayCount = 0
+            dayProgress = 0
+            lightLevel = environment.baseLightLevel(maxLight: GlobalConstants.maxLightLevel, dayProgress: dayProgress)
+            deathMarkerManager?.clearAll()
+        }
+
         // Resume
         gameState = .active
 
@@ -300,6 +338,15 @@ class GameScene: SKScene {
         }
     }
     
+    private func setPredatorsIntensity(_ intensity: PredatorsIntensity) {
+        predatorsIntensity = intensity
+        predationManager.updateIntensity(intensity)
+        // Re-plan if currently night
+        if dayProgress >= 0.5 {
+            predationManager.ensurePlanIfNight(dayProgress: dayProgress)
+        }
+    }
+    
     // MARK: State updates
     
     private func gameTick() {
@@ -308,19 +355,17 @@ class GameScene: SKScene {
         
         // Update light level (0 to 10 and back to 0)
         dayProgress = CGFloat(timeInDay / GlobalConstants.dayDuration)
-        if dayProgress <= 0.25 {
-            // Morning to noon (lightLevel increases from 0 to 10)
-            lightLevel = GlobalConstants.maxLightLevel * (dayProgress * 4)
-        } else if dayProgress <= 0.5 {
-            // Noon to night (lightLevel decreases from 10 to 0)
-            lightLevel = GlobalConstants.maxLightLevel * (1 - ((dayProgress - 0.25) * 4))
-        } else {
-            lightLevel = 0
-        }
+        lightLevel = environment.baseLightLevel(maxLight: GlobalConstants.maxLightLevel, dayProgress: dayProgress)
+        
+        // Track night progression for predation schedule
+        predationManager.advanceDayProgress(dayProgress: dayProgress, tickDuration: GlobalConstants.gameTickDuration)
         
         speed = simulationSpeed
         physicsWorld.speed = simulationSpeed
         dayCount = Int(totalTime) / Int(GlobalConstants.dayDuration)
+        
+        // Plan attacks at the beginning of night
+        predationManager.ensurePlanIfNight(dayProgress: dayProgress)
         
         if simulationMode == .learning {
             if let startDay = learningCycleStartDay, dayCount - startDay >= learningCycleLengthDays {
@@ -332,7 +377,14 @@ class GameScene: SKScene {
             }
         }
         
-        notifyOrganisms()
+        // Replaced predation + notification calls with a combined single tick pass on the main actor
+        // Run a single combined tick pass (predation + notifications) on the main actor
+        notificationTask?.cancel()
+        notificationTask = Task { [weak self] in
+            try Task.checkCancellation()
+            guard let self else { return }
+            await self.runTickPass()
+        }
     }
     
     private func finishCurrentLearningEpisode() async {
@@ -341,37 +393,42 @@ class GameScene: SKScene {
         }
     }
     
-    private func notifyOrganisms() {
-        notificationTask = Task {
-            try Task.checkCancellation()
-            
-            // Snapshot models to avoid mutation during iteration
-            let models = Array(self.organismModels.values)
-            
-            for (i, model) in models.enumerated() {
-                try Task.checkCancellation()
-                
-                // Night-time predator event: 5% chance per organism
-                if self.dayProgress >= 0.5, Double.random(in: 0..<1) < 0.05 {
-                    await model.kill()
-                    continue
-                }
-                
-                guard let view = self.organisms[model.id] else {
-                    print("\(i):Model \(model.id) should always pair with view")
-                    continue
-                }
-                view.speed = self.simulationSpeed
-                let depth = self.normalizedDepth(for: view)
-                let lightLevel = self.lightLevel(atDepth: depth)
-                let input = await SensorInput(
-                    lightLevel: lightLevel,
-                    depth: depth,
-                    dayProgress: self.dayProgress,
-                    energy: model.energy
-                )
-                await model.handleChanges(input)
+    @MainActor
+    private func runTickPass() async {
+        // Snapshot stable (model, view, depth) pairs up front
+        let pairs: [(model: OrganismModel, view: Organism, depth: CGFloat)] = organismModels.compactMap { (id, model) in
+            guard let view = organisms[id] else { return nil }
+            let depth = normalizedDepth(for: view)
+            return (model, view, depth)
+        }
+
+        // Process due night attacks via PredationManager
+        let events = await predationManager.processDueAttacks(pairs: pairs.map { ($0.view.id, $0.depth) })
+
+        // Apply events
+        for event in events {
+            switch event {
+            case let .damage(id, amount):
+                await organismModels[id]?.applyDamage(amount)
+            case let .kill(id, _):
+                await organismModels[id]?.kill()
             }
+        }
+
+        // Notify organisms using the original pairs snapshot
+        for (model, view, depth) in pairs {
+            // Skip if this model/view was removed by predation above
+            guard organismModels[model.id] != nil, organisms[view.id] != nil else { continue }
+
+            view.speed = simulationSpeed
+            let lightLevel = lightLevel(atDepth: depth)
+            let input = await SensorInput(
+                lightLevel: lightLevel,
+                depth: depth,
+                dayProgress: dayProgress,
+                energy: model.energy
+            )
+            await model.handleChanges(input)
         }
     }
     
@@ -403,12 +460,8 @@ class GameScene: SKScene {
         normalizedDepth(atPositionY: organism.position.y)
     }
     
-    // ln(depthLightLevel / surfaceLightLevel) / depth
-    private let lightDecayRate = -0.0693147180559945
-    
-    // Inverse square law
     private func lightLevel(atDepth depth: CGFloat) -> CGFloat {
-        return lightLevel * exp(depth * lightDecayRate)
+        environment.attenuatedLight(surfaceLight: lightLevel, depth: depth)
     }
     
     private func normalizedDepth(atPositionY positionY: CGFloat) -> CGFloat {
@@ -441,6 +494,43 @@ class GameScene: SKScene {
         let yConstraint = SKConstraint.positionY(yRange)
         organism.constraints = [xConstraint, yConstraint]
     }
+    
+    #if os(OSX)
+    private func presentQLearningReport() {
+        let hosting = NSHostingController(rootView: QLearningReportView())
+        let window = NSWindow(contentViewController: hosting)
+        window.title = "Q-Learning Report"
+        window.setContentSize(NSSize(width: 700, height: 420))
+        window.makeKeyAndOrderFront(nil)
+    }
+    #endif
+}
+
+extension GameScene: SimulationControlling {
+    func pauseSimulation() async {
+        await MainActor.run {
+            guard gameState != .stopped else { return }
+            if gameState == .active {
+                gameState = .paused
+                cancelCurrentUpdate()
+            }
+            // Optionally hard-pause SpriteKit:
+            // self.isPaused = true
+            // self.view?.isPaused = true
+            // self.physicsWorld.speed = 0
+        }
+    }
+
+    func resumeSimulation() async {
+        await MainActor.run {
+            guard gameState == .paused else { return }
+            gameState = .active
+            // Optionally resume SpriteKit:
+            // self.isPaused = false
+            // self.view?.isPaused = false
+            // self.physicsWorld.speed = simulationSpeed
+        }
+    }
 }
 
 #if os(OSX)
@@ -457,8 +547,8 @@ extension GameScene {
         // Find nodes at the mouse location
         let nodesAtPoint = nodes(at: sceneLocation)
         
-        if let organismNode = nodesAtPoint.first(where: { $0 is Organism }) as? Organism {
-            let model = organismModels[organismNode.id]!
+        if let organismNode = nodesAtPoint.first(where: { $0 is Organism }) as? Organism,
+           let model = organismModels[organismNode.id] {
             // Show the popover
             showOrganismPopover(sceneLocation: sceneLocation, model: model)
         } else {

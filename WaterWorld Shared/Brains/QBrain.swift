@@ -24,7 +24,8 @@ actor QBrain: BrainProtocol {
             await qLearner.reportStep(
                 currentState: previousState.0,
                 nextState: input,
-                actionIndex: previousState.1
+                actionIndex: previousState.1,
+                didDie: false
             )
         }
         
@@ -38,7 +39,8 @@ actor QBrain: BrainProtocol {
             await qLearner.reportStep(
                 currentState: previousState.0,
                 nextState: nil,
-                actionIndex: previousState.1
+                actionIndex: previousState.1,
+                didDie: didDie
             )
             self.previousState = nil
         }

@@ -20,6 +20,14 @@ enum GlobalConstants {
     static let idleEnergyLoss: Double = 0.5
     static let movementEnergyLoss: Double = 1.5
     
+    // Predation
+    // Dodge chance grows linearly from base at the surface to max at a depth fraction cutoff
+    static let predationDodgeBaseChance: Double = 0.10     // 10% at surface
+    static let predationDodgeMaxChance: Double = 0.75      // 65% at cutoff depth
+    static let predationDodgeMaxDepthFraction: Double = 0.30 // Cutoff at 30% of total depth
+    static let predationDamageOnDodge: Double = 40.0
+    
     // Movement
     static let movementPace: CGFloat = 824 / 25
 }
+

@@ -55,10 +55,7 @@ actor OrganismModel: Equatable {
     @Published private(set) var energy = GlobalConstants.maxEnergy
     private var isBusy = false
     private var lastInput: SensorInput? = nil
-    
-    private var isDead: Bool {
-        energy <= 0
-    }
+    private(set) var isDead: Bool = false
     
     // Triggers
     
@@ -67,7 +64,7 @@ actor OrganismModel: Equatable {
     
     // Handlers
     
-    private let onDeath: @MainActor @Sendable (OrganismModel) -> Void
+    private let onDeath: @MainActor @Sendable (OrganismModel, CauseOfDeath) -> Void
     
     // Dependencies
     
@@ -81,7 +78,7 @@ actor OrganismModel: Equatable {
         name: String,
         logger: Logger,
         tracker: OrganismTracker,
-        onDeath: @escaping @MainActor @Sendable (OrganismModel) -> Void
+        onDeath: @escaping @MainActor @Sendable (OrganismModel, CauseOfDeath) -> Void
     ) {
         self.brain = brain
         self.name = name
@@ -111,9 +108,21 @@ actor OrganismModel: Equatable {
         isBusy = busy
     }
     
+    func applyDamage(_ amount: Double) {
+        if isDead { return }
+        energy = max(0, energy - amount)
+    }
+    
     func kill() {
         if isDead { return }
+        isDead = true
+        // Set energy to 0 before reporting, without triggering another step
         energy = 0
+        Task { @MainActor in
+            await brain.finishEpisode(didDie: true)
+            onDeath(self, .predation)
+            await tracker.reportGatheredStatistics(forName: name)
+        }
     }
     
     func finishEpisodeSurvived() async {
@@ -125,9 +134,12 @@ actor OrganismModel: Equatable {
     private func observeEnergyChanges() async {
         for await energyValue in $energy.values {
             if energyValue <= 0 {
-                await brain.finishEpisode(didDie: true)
-                await onDeath(self)
-                await tracker.reportGatheredStatistics(forName: name)
+                if !isDead {
+                    isDead = true
+                    await brain.finishEpisode(didDie: true)
+                    await onDeath(self, .energyDepletion)
+                    await tracker.reportGatheredStatistics(forName: name)
+                }
                 break
             }
         }

@@ -27,11 +27,10 @@ struct MainView: View {
                 OrganismPopover(model: selectedOrganismModel) {
                     self.selectedOrganismModel = nil
                 }
-                    .frame(width: 450, height: 300) // Adjust size
-                    .background(Color.black.opacity(0.9))
-                    .cornerRadius(12)
-                    .transition(.opacity) // Add smooth appearance/disappearance
-                    .zIndex(1)
+                .background(Color.black.opacity(0.9))
+                .cornerRadius(12)
+                .transition(.opacity) // Add smooth appearance/disappearance
+                .zIndex(1)
             }
         }
     }
