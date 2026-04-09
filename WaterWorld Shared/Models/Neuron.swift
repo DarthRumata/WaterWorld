@@ -8,8 +8,8 @@
 import Foundation
 
 struct Neuron: Sendable {
-    let weights: [Double]
-    let bias: Double
+    private(set) var weights: [Double]
+    private(set) var bias: Double
 
     init(weights: [Double], bias: Double) {
         self.weights = weights
@@ -22,5 +22,13 @@ struct Neuron: Sendable {
         }
         
         return zip(weights, inputs).map(*).reduce(0, +) + bias
+    }
+    
+    mutating func updateWeights(learningRate: Double, delta: Double, inputs: [Double]) {
+        for (i, weight) in weights.enumerated() {
+            weights[i] -= learningRate * delta * inputs[i]
+        }
+        
+        bias -= learningRate * delta
     }
 }

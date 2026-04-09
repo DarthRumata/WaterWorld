@@ -13,6 +13,7 @@ final class QLearningStore {
 
     private(set) var steps: [QLearningStep] = []
     private(set) var batchLosses: [Double] = []
+    private(set) var batchRewards: [Double] = []
 
     func append(_ step: QLearningStep) {
         steps.append(step)
@@ -21,9 +22,14 @@ final class QLearningStore {
     func appendLoss(_ loss: Double) {
         batchLosses.append(loss)
     }
+    
+    func appendRewardTrend(_ avgReward: Double) {
+        batchRewards.append(avgReward)
+    }
 
     func clear() {
         steps.removeAll()
         batchLosses.removeAll()
+        batchRewards.removeAll()
     }
 }

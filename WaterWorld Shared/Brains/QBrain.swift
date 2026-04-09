@@ -7,7 +7,9 @@
 
 actor QBrain: BrainProtocol {
     var neuralNetwork: NeuralNetwork? {
-        qLearner.mainNetwork
+        get async {
+            await qLearner.mainNetwork
+        }
     }
     
     private let qLearner: QLearner
@@ -46,3 +48,4 @@ actor QBrain: BrainProtocol {
         }
     }
 }
+

@@ -14,6 +14,20 @@ enum Activation: Sendable {
     case linear
 }
 
+extension Activation {
+    func derivative(at z: Double) -> Double {
+        switch self {
+        case .sigmoid:
+            let sigmoid = 1.0 / (1.0 + exp(-z))
+            return sigmoid * (1 - sigmoid)
+        case .relu:
+            return z > 0 ? 1.0 : 0.0
+        case .softmax, .linear:
+            return 1.0
+        }
+    }
+}
+
 enum InitializationStrategy {
     case uniformXavier
     case uniform
@@ -33,7 +47,7 @@ enum InitializationStrategy {
 }
 
 struct NeuralNetwork: Sendable {
-    let layers: [NeuralLayer]
+    var layers: [NeuralLayer]
 
     init(inputSize: Int, hiddenLayerSizes: [Int], outputSize: Int, weightInitStrategy: InitializationStrategy) {
         var previousSize = inputSize
@@ -75,10 +89,27 @@ struct NeuralNetwork: Sendable {
             layer.computeOutputs(inputs: currentInputs)
         }
     }
+    
+    mutating func backward(error: [Double], inputs: [Double], learningRate: Double) {
+        // Cache activations for each layer
+        var activations: [[Double]] = [inputs]
+        var currentInputs = inputs
+        for layer in layers {
+            let outputs = layer.computeOutputs(inputs: currentInputs)
+            activations.append(outputs)
+            currentInputs = outputs
+        }
+        // Propagate error backwards
+        var currentError = error
+        for i in (0..<layers.count).reversed() {
+            let inputToLayer = activations[i]
+            currentError = layers[i].backward(error: currentError, inputs: inputToLayer, learningRate: learningRate)
+        }
+    }
 }
 
 struct NeuralLayer: Sendable {
-    let neurons: [Neuron]
+    var neurons: [Neuron]
     let activation: Activation
 
     init(neuronCount: Int, inputCount: Int, weightInitStrategy: InitializationStrategy, activation: Activation) {
@@ -106,4 +137,24 @@ struct NeuralLayer: Sendable {
             return zs
         }
     }
+    
+    mutating func backward(error: [Double], inputs: [Double], learningRate: Double) -> [Double] {
+        var prevLayerError = [Double](repeating: 0.0, count: neurons[0].weights.count)
+        
+        for i in neurons.indices {
+            var neuron = neurons[i]
+            let z = neuron.weightedSum(inputs: inputs)
+            
+            let activationDeriv = activation.derivative(at: z)
+            
+            let delta = error[i] * activationDeriv
+            
+            // Update weights
+            neuron.updateWeights(learningRate: learningRate, delta: delta, inputs: inputs)
+            neurons[i] = neuron
+        }
+        
+        return prevLayerError
+    }
 }
+

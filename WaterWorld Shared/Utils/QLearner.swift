@@ -16,7 +16,7 @@ struct QLearningStep: Identifiable, Sendable {
 }
 
 actor QLearner {
-    let mainNetwork = NeuralNetworkBuilder(inputSize: 4)
+    var mainNetwork = NeuralNetworkBuilder(inputSize: 4)
         .dense(10, activation: .relu)
         .dense(10, activation: .relu)
         .dense(3, activation: .linear)
@@ -30,15 +30,17 @@ actor QLearner {
     
     private let epsilonGreedy: Double
     private let gamma: Double
+    private let learningRate: Double
     private var expirienceBuffer: [QLearningStep] = []
     
     private let batchSize: Int
     private let simulationController: SimulationControlling?
     
-    init(epsilonGreedy: Double, gamma: Double, batchSize: Int = 64, simulationController: SimulationControlling? = nil) {
+    init(epsilonGreedy: Double, gamma: Double, batchSize: Int = 64, learningRate: Double = 0.01, simulationController: SimulationControlling? = nil) {
         self.epsilonGreedy = epsilonGreedy
         self.gamma = gamma
         self.batchSize = batchSize
+        self.learningRate = learningRate
         self.simulationController = simulationController
     }
     
@@ -151,11 +153,19 @@ actor QLearner {
         // Compute MSE loss for monitoring/training step
         let mseLoss = meanSquaredError(predictions: predictedQsForTakenActions, targets: targets)
 
-        // Simulate work (placeholder for optimizer/backprop update)
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        for (step, target) in zip(batch, targets) {
+            let inputs = step.state.normalized
+            var predicted = mainNetwork.predict(inputs: inputs)
+            var error = Array(repeating: 0.0, count: predicted.count)
+            error[step.actionIndex] = predicted[step.actionIndex] - target
+            mainNetwork.backward(error: error, inputs: inputs, learningRate: learningRate)
+        }
+
+        let avgReward = batch.map { $0.reward }.reduce(0, +) / Double(batch.count)
 
         await MainActor.run {
             QLearningStore.shared.appendLoss(mseLoss)
+            QLearningStore.shared.appendRewardTrend(avgReward)
         }
     }
     
