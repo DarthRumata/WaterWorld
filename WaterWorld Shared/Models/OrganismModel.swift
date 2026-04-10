@@ -44,12 +44,6 @@ actor OrganismModel: Equatable {
         }
     }
     
-    var neuralNetwork: NeuralNetwork? {
-        get async {
-            await brain.neuralNetwork
-        }
-    }
-    
     // Private State
     
     @Published private(set) var energy = GlobalConstants.maxEnergy

@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct QLearningStep: Identifiable, Sendable {
+struct QLearningExperience: Identifiable, Sendable {
     let id: UUID = UUID()
     let state: SensorInput
     let actionIndex: Int
@@ -22,19 +22,28 @@ actor QLearner {
         .dense(3, activation: .linear)
         .build(weightInitStrategy: .uniformXavier)
     
-    private let targetNetwork = NeuralNetworkBuilder(inputSize: 4)
+    private var targetNetwork = NeuralNetworkBuilder(inputSize: 4)
         .dense(10, activation: .relu)
         .dense(10, activation: .relu)
         .dense(3, activation: .linear)
         .build(weightInitStrategy: .uniformXavier)
     
-    private let epsilonGreedy: Double
-    private let gamma: Double
-    private let learningRate: Double
-    private var expirienceBuffer: [QLearningStep] = []
-    
     private let batchSize: Int
+	private var epsilonGreedy: Double
+	private let gamma: Double
+	private let learningRate: Double
     private let simulationController: SimulationControlling?
+	
+	private let maxBufferSize: Int = 100000
+	private let trainInterval = 960
+	private let epsilonMin: Double = 0.01
+	private let epsilonDecay: Double = 0.995
+	private let targetUpdateInterval: Int = 100
+	
+	private var expirienceBuffer: [QLearningExperience] = []
+	private var stepsSinceLastTrain = 0
+	private var learningStepsCount = 0
+
     
     init(epsilonGreedy: Double, gamma: Double, batchSize: Int = 64, learningRate: Double = 0.01, simulationController: SimulationControlling? = nil) {
         self.epsilonGreedy = epsilonGreedy
@@ -60,13 +69,12 @@ actor QLearner {
                 bestQIndex = i
             }
         }
-        
         return bestQIndex
     }
     
-    func reportStep(currentState: SensorInput, nextState: SensorInput?, actionIndex: Int, didDie: Bool) {
+    func reportExperience(currentState: SensorInput, nextState: SensorInput?, actionIndex: Int, didDie: Bool) {
         let reward = calculateReward(currentState: currentState, nextState: nextState, didDie: didDie)
-        let step = QLearningStep(
+        let step = QLearningExperience(
             state: currentState,
             actionIndex: actionIndex,
             reward: reward,
@@ -74,30 +82,43 @@ actor QLearner {
         )
         
         expirienceBuffer.append(step)
-        // Also forward to a shared store for UI reporting
-        Task {
-            await QLearningStore.shared.append(step)
-        }
+		
+		if expirienceBuffer.count > maxBufferSize {
+			expirienceBuffer.removeFirst()
+		}
+			
+		stepsSinceLastTrain += 1
         
-        Task { [weak self] in
-            await self?.flushIfNeeded()
-        }
+		if expirienceBuffer.count >= batchSize && stepsSinceLastTrain >= trainInterval {
+			stepsSinceLastTrain = 0 // Сбрасываем счетчик
+			
+			Task { [weak self] in
+				await self?.trainOnMiniBatch()
+			}
+		}
+		
+		// Also forward to a shared store for UI reporting
+		Task {
+			await QLearningStore.shared.append(step)
+		}
     }
     
-    private func flushIfNeeded() async {
-        guard expirienceBuffer.count >= batchSize else { return }
-        let batch = expirienceBuffer
-        expirienceBuffer.removeAll()
+	private func trainOnMiniBatch() async {
+		var batch: [QLearningExperience] = []
+		for _ in 0..<batchSize {
+			if let randomStep = expirienceBuffer.randomElement() {
+				batch.append(randomStep)
+			}
+		}
 
         // Capture the reference before any suspension to avoid sending across awaits
         let controller = simulationController
         // Pause on the main actor (async-safe)
-        await controller?.pauseSimulation()
+        await controller?.startTraining()
 
         defer {
-            // Use a new task but capture the controller locally to avoid touching self
             Task { @MainActor [controller] in
-                await controller?.resumeSimulation()
+                await controller?.finishTraining()
             }
         }
 
@@ -107,7 +128,7 @@ actor QLearner {
     // MARK: - Learning
 
     /// Compute DQN targets for a batch: if nextState is nil -> target = reward; else target = reward + gamma * max_a' Q_target(nextState, a')
-    private func computeTargets(for batch: [QLearningStep]) -> [Double] {
+    private func computeTargets(for batch: [QLearningExperience]) -> [Double] {
         var targets: [Double] = []
         targets.reserveCapacity(batch.count)
         for step in batch {
@@ -136,15 +157,17 @@ actor QLearner {
         return sumSquaredError / Double(predictions.count)
     }
 
-    private func learn(from batch: [QLearningStep]) async {
+    private func learn(from batch: [QLearningExperience]) async {
         guard !batch.isEmpty else { return }
 
-        // Predict Q(s, ·) for taken actions using main network
+        // Predict Q(s, ·) for taken actions using main network, also track max Q for monitoring
         var predictedQsForTakenActions: [Double] = []
+        var maxQSum: Double = 0
         predictedQsForTakenActions.reserveCapacity(batch.count)
         for step in batch {
             let currentQ = mainNetwork.predict(inputs: step.state.normalized)
             predictedQsForTakenActions.append(currentQ[step.actionIndex])
+            maxQSum += currentQ.max() ?? 0
         }
 
         // Compute DQN targets with target network
@@ -153,22 +176,42 @@ actor QLearner {
         // Compute MSE loss for monitoring/training step
         let mseLoss = meanSquaredError(predictions: predictedQsForTakenActions, targets: targets)
 
+        // Yield so other actor requests (e.g. neuralNetwork reads) can be served between phases
+        await Task.yield()
+
         for (step, target) in zip(batch, targets) {
             let inputs = step.state.normalized
-            var predicted = mainNetwork.predict(inputs: inputs)
+			let predicted = mainNetwork.predict(inputs: inputs)
             var error = Array(repeating: 0.0, count: predicted.count)
             error[step.actionIndex] = predicted[step.actionIndex] - target
             mainNetwork.backward(error: error, inputs: inputs, learningRate: learningRate)
         }
+		
+		learningStepsCount += 1
+		epsilonGreedy = max(epsilonMin, epsilonGreedy * epsilonDecay)
+		// Жестко копируем веса каждые N шагов (например, 10 или 50)
+		if learningStepsCount % 10 == 0 {
+			targetNetwork = mainNetwork
+		}
 
         let avgReward = batch.map { $0.reward }.reduce(0, +) / Double(batch.count)
+        let avgMaxQ = maxQSum / Double(batch.count)
 
-        await MainActor.run {
+        Task { @MainActor in
             QLearningStore.shared.appendLoss(mseLoss)
             QLearningStore.shared.appendRewardTrend(avgReward)
+            QLearningStore.shared.appendMaxQTrend(avgMaxQ)
         }
     }
     
+    func applySnapshot(_ snapshot: NeuralNetworkSnapshot) throws {
+        guard let network = NeuralNetwork(snapshot: snapshot) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        mainNetwork = network
+        targetNetwork = network
+    }
+
     private func calculateReward(currentState: SensorInput, nextState: SensorInput?, didDie: Bool) -> Double {
         if let nextState {
             let energyDelta = nextState.energy - currentState.energy

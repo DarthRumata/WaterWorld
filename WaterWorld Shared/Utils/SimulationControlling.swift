@@ -8,7 +8,13 @@ import Foundation
 public protocol SimulationControlling: Sendable {
     /// Asynchronously pause the simulation.
     func pauseSimulation() async
-    
+
     /// Asynchronously resume the simulation.
     func resumeSimulation() async
+
+    /// Pause the simulation and mark it as training (blocks user resume).
+    func startTraining() async
+
+    /// Finish training and resume the simulation.
+    func finishTraining() async
 }

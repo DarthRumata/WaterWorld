@@ -10,25 +10,25 @@ import SpriteKit
 import SwiftUI
 
 struct SpriteKitContainer: NSViewRepresentable {
-    let onTapOrganism: (OrganismModel?) -> Void
+    let onTapOrganism: (OrganismSelection?) -> Void
+    let onSceneReady: (GameHUDModel) -> Void
 
     func makeNSView(context: Context) -> SKView {
         let skView = SKView()
         let scene = GameScene.newGameScene()
 
-        // Pass the callback to the scene
         scene.onTapOrganism = onTapOrganism
-        
+        let hudModel = scene.hudModel
+        Task { @MainActor in onSceneReady(hudModel) }
+
         skView.showsFPS = true
         skView.showsNodeCount = true
         skView.ignoresSiblingOrder = true
 
         skView.presentScene(scene)
-        
+
         return skView
     }
 
-    func updateNSView(_ nsView: SKView, context: Context) {
-        
-    }
+    func updateNSView(_ nsView: SKView, context: Context) {}
 }

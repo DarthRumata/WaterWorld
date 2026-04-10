@@ -35,6 +35,7 @@
 				Models/GameState.swift,
 				Models/NeuralNetwork.swift,
 				Models/NeuralNetworkBuilder.swift,
+				Models/NeuralNetworkSnapshot.swift,
 				Models/Neuron.swift,
 				Models/OrganismModel.swift,
 				Models/SensorInput.swift,
@@ -43,7 +44,11 @@
 				PredationSystem.swift,
 				ToggleSwitchNode.swift,
 				UI/CustomPopoverNode.swift,
+				UI/GameHUDModel.swift,
+				UI/GameHUDView.swift,
 				UI/MainView.swift,
+				UI/MetricsChartView.swift,
+				UI/MetricsOverlayView.swift,
 				UI/Organism.swift,
 				UI/OrganismPopover/LayerView.swift,
 				UI/OrganismPopover/NeuralNetworkView.swift,
@@ -208,6 +213,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
@@ -238,6 +244,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;

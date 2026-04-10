@@ -160,9 +160,10 @@ class UIPanel: SKNode {
             .store(in: &cancellables)
         
         gameState
-            .sink { [pauseButton] state in
-                pauseButton?.fontColor = state == .stopped ? .gray : Constants.textColor
-                pauseButton?.text = state == .active ? "Pause" : "Resume"
+            .sink { [weak self] state in
+                guard let self else { return }
+                self.pauseButton?.fontColor = (state == .stopped || state == .training) ? .gray : Constants.textColor
+                self.pauseButton?.text = state == .active ? "Pause" : "Resume"
             }
             .store(in: &cancellables)
         
@@ -181,6 +182,7 @@ class UIPanel: SKNode {
                 self?.predatorsIntensitySelector?.setSelectedIndex(idx, animated: true)
             }
             .store(in: &cancellables)
+
     }
     
     @available(*, unavailable)
@@ -193,7 +195,7 @@ class UIPanel: SKNode {
         border.path = CGPath(rect: CGRect(x: 0, y: 0, width: size.width, height: Constants.panelHeight), transform: nil)
         dayCountLabel.position = CGPoint(x: 10 , y: Constants.panelHeight - 40)
         organismCountLabel.position = CGPoint(x: 10 , y: Constants.panelHeight - 90)
-        lightLevelLabel.position = CGPoint(x: size.width / 2 , y: Constants.panelHeight - 40)
+lightLevelLabel.position = CGPoint(x: size.width / 2 , y: Constants.panelHeight - 40)
         timeLabel.position = CGPoint(x: size.width / 2 , y: Constants.panelHeight - 90)
         
         // Right-aligned vertical stack for controls
@@ -257,7 +259,7 @@ class UIPanel: SKNode {
     }
     
     // Center
-    
+
     private func addLightLevelLabel() {
         lightLevelLabel = SKLabelNode(fontNamed: "Helvetica")
         lightLevelLabel.fontSize = 18

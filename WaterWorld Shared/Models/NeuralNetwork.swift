@@ -91,19 +91,23 @@ struct NeuralNetwork: Sendable {
     }
     
     mutating func backward(error: [Double], inputs: [Double], learningRate: Double) {
-        // Cache activations for each layer
-        var activations: [[Double]] = [inputs]
+        // Forward pass: cache inputs and pre-activation z values per layer
+        struct LayerCache {
+            let inputs: [Double]
+            let zs: [Double]
+        }
+        var caches: [LayerCache] = []
         var currentInputs = inputs
         for layer in layers {
-            let outputs = layer.computeOutputs(inputs: currentInputs)
-            activations.append(outputs)
+            let zs = layer.neurons.map { $0.weightedSum(inputs: currentInputs) }
+            let outputs = layer.applyActivation(zs)
+            caches.append(LayerCache(inputs: currentInputs, zs: zs))
             currentInputs = outputs
         }
-        // Propagate error backwards
+        // Backward pass: reuse cached z values, no redundant computation
         var currentError = error
         for i in (0..<layers.count).reversed() {
-            let inputToLayer = activations[i]
-            currentError = layers[i].backward(error: currentError, inputs: inputToLayer, learningRate: learningRate)
+            currentError = layers[i].backward(error: currentError, inputs: caches[i].inputs, zs: caches[i].zs, learningRate: learningRate)
         }
     }
 }
@@ -111,6 +115,11 @@ struct NeuralNetwork: Sendable {
 struct NeuralLayer: Sendable {
     var neurons: [Neuron]
     let activation: Activation
+
+    init(neurons: [Neuron], activation: Activation) {
+        self.neurons = neurons
+        self.activation = activation
+    }
 
     init(neuronCount: Int, inputCount: Int, weightInitStrategy: InitializationStrategy, activation: Activation) {
         self.activation = activation
@@ -122,7 +131,10 @@ struct NeuralLayer: Sendable {
 
     // Forward pass for the layer
     func computeOutputs(inputs: [Double]) -> [Double] {
-        let zs = neurons.map { $0.weightedSum(inputs: inputs) }
+        applyActivation(neurons.map { $0.weightedSum(inputs: inputs) })
+    }
+
+    func applyActivation(_ zs: [Double]) -> [Double] {
         switch activation {
         case .sigmoid:
             return zs.map { 1.0 / (1.0 + exp(-$0)) }
@@ -137,23 +149,16 @@ struct NeuralLayer: Sendable {
             return zs
         }
     }
-    
-    mutating func backward(error: [Double], inputs: [Double], learningRate: Double) -> [Double] {
+
+    mutating func backward(error: [Double], inputs: [Double], zs: [Double], learningRate: Double) -> [Double] {
         var prevLayerError = [Double](repeating: 0.0, count: neurons[0].weights.count)
-        
         for i in neurons.indices {
-            var neuron = neurons[i]
-            let z = neuron.weightedSum(inputs: inputs)
-            
-            let activationDeriv = activation.derivative(at: z)
-            
-            let delta = error[i] * activationDeriv
-            
-            // Update weights
-            neuron.updateWeights(learningRate: learningRate, delta: delta, inputs: inputs)
-            neurons[i] = neuron
+            let delta = error[i] * activation.derivative(at: zs[i])
+            for j in neurons[i].weights.indices {
+                prevLayerError[j] += neurons[i].weights[j] * delta
+            }
+            neurons[i].updateWeights(learningRate: learningRate, delta: delta, inputs: inputs)
         }
-        
         return prevLayerError
     }
 }

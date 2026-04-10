@@ -7,44 +7,50 @@
 
 import SwiftUI
 
+private struct IndexedExperience: Identifiable {
+    let index: Int
+    let experience: QLearningExperience
+    var id: UUID { experience.id }
+}
+
 struct QLearningReportView: View {
-    @State private var steps: [QLearningStep] = []
+    private let store = QLearningStore.shared
+
+    private var rows: [IndexedExperience] {
+        store.steps.enumerated().map { IndexedExperience(index: $0.offset, experience: $0.element) }
+    }
 
     var body: some View {
         VStack(alignment: .leading) {
             HStack {
                 Text("Q-Learning Report").font(.title2).bold()
                 Spacer()
-                Button("Clear") { QLearningStore.shared.clear(); reload() }
+                Button("Clear") { store.clear() }
             }
             .padding(.bottom, 8)
 
-            Table(steps) {
-                TableColumn("#") { step in
-                    Text(String(steps.firstIndex(where: { $0.id == step.id }) ?? 0))
+            Table(rows) {
+                TableColumn("#") { item in
+                    Text(String(item.index))
                 }.width(ideal: 40)
-                TableColumn("State (E,L,D,P)") { step in
-                    Text(String(format: "%.2f, %.2f, %.2f, %.2f", step.state.energy, Double(step.state.lightLevel), Double(step.state.depth), Double(step.state.dayProgress)))
+                TableColumn("State (E,L,D,P)") { item in
+                    let s = item.experience.state
+                    Text(String(format: "%.2f, %.2f, %.2f, %.2f", s.energy, Double(s.lightLevel), Double(s.depth), Double(s.dayProgress)))
                 }
-                TableColumn("Action") { step in
-                    Text(String(step.actionIndex))
+                TableColumn("Action") { item in
+                    Text(String(item.experience.actionIndex))
                 }.width(ideal: 60)
-                TableColumn("Reward") { step in
-                    Text(String(format: "%.2f", step.reward))
+                TableColumn("Reward") { item in
+                    Text(String(format: "%.2f", item.experience.reward))
                 }.width(ideal: 80)
-                TableColumn("Next Energy") { step in
-                    Text(step.nextState.map { String(format: "%.2f", $0.energy) } ?? "—")
+                TableColumn("Next Energy") { item in
+                    Text(item.experience.nextState.map { String(format: "%.2f", $0.energy) } ?? "—")
                         .foregroundColor(.primary)
                 }.width(ideal: 100)
             }
             .frame(minHeight: 300)
         }
         .padding(12)
-        .onAppear { reload() }
-    }
-
-    private func reload() {
-        steps = QLearningStore.shared.steps
     }
 }
 

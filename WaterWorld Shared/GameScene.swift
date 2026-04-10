@@ -18,7 +18,7 @@ import AppKit
 class GameScene: SKScene {
     // MARK: Callbacks
     
-    var onTapOrganism: ((OrganismModel?) -> Void)?
+    var onTapOrganism: ((OrganismSelection?) -> Void)?
     
     // Global state
     
@@ -36,11 +36,12 @@ class GameScene: SKScene {
     @Published private var predatorsIntensity: PredatorsIntensity = .medium
     
     // UI
-    
-    private var uiPanel: UIPanel?
+    let hudModel = GameHUDModel()
     private var container: WaterContainer!
     private var deathMarkerManager: DeathMarkerManager?
     private var infoPopover: NSPopover?
+    private weak var reportWindow: NSWindow?
+    private weak var metricsWindow: NSWindow?
     private var popoverNode: CustomPopoverNode?
     
     // Combine
@@ -74,7 +75,7 @@ class GameScene: SKScene {
         }
         
         // Set the scale mode to scale to fit the window
-        scene.scaleMode = .aspectFit
+        scene.scaleMode = .resizeFill
         scene.physicsWorld.gravity = .zero // Keep gravity neutral
         scene.physicsWorld.speed = 1.0 // Default speed for consistent resolution
         
@@ -91,9 +92,9 @@ class GameScene: SKScene {
         didChangeSize(size)
         
         self.qLearner = QLearner(
-            epsilonGreedy: 0.1,
+            epsilonGreedy: 1.0,
             gamma: 0.99,
-            batchSize: 6400,
+            batchSize: 128,
             simulationController: self
         )
     }
@@ -124,8 +125,6 @@ class GameScene: SKScene {
 
         print("Scene size changed from \(oldSize) to \(size)")
         
-        // Update positions of UI elements if necessary
-        uiPanel?.update(withSceneSize: size)
         container?.update(sceneSize: size)
         
         // Re-apply bounds constraints to organisms after size change
@@ -138,9 +137,9 @@ class GameScene: SKScene {
     
     private func setUpScene() {
         backgroundColor = SKColor.white
-        
+
         // Create UI
-        addUIPanel()
+        setupHUDModel()
         addContainer()
         
         predationManager = PredationManager(intensity: predatorsIntensity)
@@ -161,62 +160,51 @@ class GameScene: SKScene {
             .sink { [weak self] progress in
                 guard let self else { return }
                 self.container.color = DayNightStyler.waterColor(for: progress)
+                self.hudModel.dayProgress = progress
             }
             .store(in: &cancellables)
+
+        $dayCount.sink { [weak self] in self?.hudModel.dayCount = $0 }.store(in: &cancellables)
+        $simulationSpeed.sink { [weak self] in self?.hudModel.simulationSpeed = $0 }.store(in: &cancellables)
+        $lightLevel.sink { [weak self] in self?.hudModel.lightLevel = $0 }.store(in: &cancellables)
+        $gameState.sink { [weak self] in self?.hudModel.gameState = $0 }.store(in: &cancellables)
+        $simulationMode.sink { [weak self] in self?.hudModel.simulationMode = $0 }.store(in: &cancellables)
+        $predatorsIntensity.sink { [weak self] in self?.hudModel.predatorsIntensity = $0 }.store(in: &cancellables)
+        $organisms.sink { [weak self] in self?.hudModel.organismsCount = $0.count }.store(in: &cancellables)
     }
     
-    private func addUIPanel() {
-        let uiPanel = UIPanel(
-            daysCount: $dayCount.eraseToAnyPublisher(),
-            organismsCount: $organisms.map { $0.count }.eraseToAnyPublisher(),
-            speed: $simulationSpeed.eraseToAnyPublisher(),
-            lightLevel: $lightLevel.eraseToAnyPublisher(),
-            dayProgress: $dayProgress.eraseToAnyPublisher(),
-            gameState: $gameState.eraseToAnyPublisher(),
-            simulationMode: $simulationMode.eraseToAnyPublisher(),
-            predatorsIntensity: $predatorsIntensity.eraseToAnyPublisher(),
-            onTapRestartButton: { [weak self] in
-                self?.restartSimulation()
-            },
-            onTapIncreaseSpeed: { [weak self] in
-                guard let self else { return }
-                
-                let newSpeed = self.simulationSpeed <= 1 ? self.simulationSpeed * 2 : self.simulationSpeed + 1
-                self.simulationSpeed = min(newSpeed, 100)
-            },
-            onTapDecreaseSpeed: { [weak self] in
-                guard let self else { return }
-                
-                let newSpeed = self.simulationSpeed <= 1 ? self.simulationSpeed / 2 : self.simulationSpeed - 1
-                self.simulationSpeed = max(newSpeed, 0.25)
-            },
-            onTapPause: { [weak self] in
-                guard let self, self.gameState != .stopped else { return }
-                Task {
-                    if self.gameState == .active {
-                        await self.pauseSimulation()
-                    } else if self.gameState == .paused {
-                        await self.resumeSimulation()
-                    }
+    private func setupHUDModel() {
+        hudModel.onRestart = { [weak self] in self?.restartSimulation() }
+        hudModel.onIncreaseSpeed = { [weak self] in
+            guard let self else { return }
+            let newSpeed = self.simulationSpeed <= 1 ? self.simulationSpeed * 2 : self.simulationSpeed + 1
+            self.simulationSpeed = min(newSpeed, 100)
+        }
+        hudModel.onDecreaseSpeed = { [weak self] in
+            guard let self else { return }
+            let newSpeed = self.simulationSpeed <= 1 ? self.simulationSpeed / 2 : self.simulationSpeed - 1
+            self.simulationSpeed = max(newSpeed, 0.25)
+        }
+        hudModel.onPause = { [weak self] in
+            guard let self, self.gameState != .stopped else { return }
+            Task {
+                if self.gameState == .active {
+                    await self.pauseSimulation()
+                } else if self.gameState == .paused {
+                    await self.resumeSimulation()
                 }
-            },
-            onTapReport: { [weak self] in self?.presentQLearningReport() }, onTapToggleMode: { [weak self] in
-                self?.toggleSimulationMode()
-            },
-            onSelectPredatorIntensity: { [weak self] intensity in
-                self?.setPredatorsIntensity(intensity)
             }
-        )
-        
-        addChild(uiPanel)
-        
-        self.uiPanel = uiPanel
+        }
+        hudModel.onReport = { [weak self] in self?.presentQLearningReport() }
+        hudModel.onToggleMode = { [weak self] in self?.toggleSimulationMode() }
+        hudModel.onSelectPredatorsIntensity = { [weak self] intensity in self?.setPredatorsIntensity(intensity) }
+        hudModel.onTapMetric = { [weak self] tab in self?.presentMetricsChart(tab: tab) }
     }
     
     private func addContainer() {
         container = WaterContainer(
             color: NSColor(red: 116.0 / 255, green: 204.0 / 255, blue: 244.0 / 255, alpha: 0.7),
-            size: CGSize(width: size.width, height: size.height - 200)
+            size: CGSize(width: size.width, height: size.height)
         )
         container.anchorPoint = CGPoint(x: 0, y: 0)
         container.position = .zero
@@ -248,6 +236,10 @@ class GameScene: SKScene {
                 }
                 self.organismModels.removeValue(forKey: id)
                 self.organisms.removeValue(forKey: id)
+
+                if self.simulationMode == .learning, self.organismModels.isEmpty {
+                    self.startNewLearningEpisode()
+                }
             }
 
             let organism = Organism(
@@ -256,7 +248,11 @@ class GameScene: SKScene {
                 color: baseColor,
                 radius: 10
             ) { [weak self] organism in
-                self?.onTapOrganism?(model)
+                guard let self else { return }
+                Task {
+                    let network = await self.qLearner.mainNetwork
+                    self.onTapOrganism?(OrganismSelection(model: model, network: network))
+                }
             }
             organisms[model.id] = organism
             organismModels[model.id] = model
@@ -369,11 +365,7 @@ class GameScene: SKScene {
         
         if simulationMode == .learning {
             if let startDay = learningCycleStartDay, dayCount - startDay >= learningCycleLengthDays {
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    await self.finishCurrentLearningEpisode()
-                    self.resetPopulationForLearningCycle()
-                }
+                startNewLearningEpisode()
             }
         }
         
@@ -387,10 +379,20 @@ class GameScene: SKScene {
         }
     }
     
+    private func startNewLearningEpisode() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.finishCurrentLearningEpisode()
+            self.resetPopulationForLearningCycle()
+        }
+    }
+
     private func finishCurrentLearningEpisode() async {
         for model in organismModels.values {
             await model.finishEpisodeSurvived()
         }
+        let survivalRate = Double(organismModels.count) / Double(GlobalConstants.initialPopulation)
+        QLearningStore.shared.appendSurvivalRate(survivalRate)
     }
     
     @MainActor
@@ -497,11 +499,34 @@ class GameScene: SKScene {
     
     #if os(OSX)
     private func presentQLearningReport() {
+        if let existing = reportWindow {
+            existing.makeKeyAndOrderFront(nil)
+            return
+        }
         let hosting = NSHostingController(rootView: QLearningReportView())
         let window = NSWindow(contentViewController: hosting)
         window.title = "Q-Learning Report"
         window.setContentSize(NSSize(width: 700, height: 420))
         window.makeKeyAndOrderFront(nil)
+        reportWindow = window
+    }
+
+    private func presentMetricsChart(tab: MetricTab) {
+        if let existing = metricsWindow {
+            existing.makeKeyAndOrderFront(nil)
+            // Switch tab in existing window
+            if let hosting = existing.contentViewController as? NSHostingController<MetricsChartView> {
+                hosting.rootView.selectedTab = tab
+            }
+            return
+        }
+        let view = MetricsChartView(selectedTab: tab)
+        let hosting = NSHostingController(rootView: view)
+        let window = NSWindow(contentViewController: hosting)
+        window.title = "Metrics"
+        window.setContentSize(NSSize(width: 700, height: 450))
+        window.makeKeyAndOrderFront(nil)
+        metricsWindow = window
     }
     #endif
 }
@@ -529,6 +554,21 @@ extension GameScene: SimulationControlling {
             // self.isPaused = false
             // self.view?.isPaused = false
             // self.physicsWorld.speed = simulationSpeed
+        }
+    }
+
+    func startTraining() async {
+        await MainActor.run {
+            guard gameState == .active else { return }
+            gameState = .training
+            cancelCurrentUpdate()
+        }
+    }
+
+    func finishTraining() async {
+        await MainActor.run {
+            guard gameState == .training else { return }
+            gameState = .active
         }
     }
 }

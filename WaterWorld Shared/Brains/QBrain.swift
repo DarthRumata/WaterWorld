@@ -23,7 +23,7 @@ actor QBrain: BrainProtocol {
         let actionIndex = await qLearner.provideActionIndex(for: input)
         
         if let previousState {
-            await qLearner.reportStep(
+            await qLearner.reportExperience(
                 currentState: previousState.0,
                 nextState: input,
                 actionIndex: previousState.1,
@@ -38,7 +38,7 @@ actor QBrain: BrainProtocol {
     
     func finishEpisode(didDie: Bool) async {
         if let previousState {
-            await qLearner.reportStep(
+            await qLearner.reportExperience(
                 currentState: previousState.0,
                 nextState: nil,
                 actionIndex: previousState.1,

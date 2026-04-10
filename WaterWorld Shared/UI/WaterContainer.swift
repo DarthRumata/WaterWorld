@@ -23,6 +23,6 @@ class WaterContainer: SKSpriteNode {
     }
 
     func update(sceneSize: CGSize) {
-        size = CGSize(width: sceneSize.width, height: sceneSize.height - 200)
+        size = CGSize(width: sceneSize.width, height: sceneSize.height)
     }
 }

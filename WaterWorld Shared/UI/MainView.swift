@@ -6,31 +6,36 @@
 //
 import SwiftUI
 
-struct OrganismUIModel {
-    let id: String
-    let name: String
-    let neuralNetwork: NeuralNetwork
+struct OrganismSelection {
+    let model: OrganismModel
+    let network: NeuralNetwork?
 }
 
 struct MainView: View {
-    @State private var selectedOrganismModel: OrganismModel?
+    @State private var selection: OrganismSelection?
+    @State private var hudModel: GameHUDModel?
 
     var body: some View {
-        ZStack {
-            // SpriteKit scene
-            SpriteKitContainer { organismModel in
-                self.selectedOrganismModel = organismModel
+        VStack(spacing: 0) {
+            if let hudModel {
+                GameHUDView(hud: hudModel)
             }
 
-            // Neural network overlay
-            if let selectedOrganismModel {
-                OrganismPopover(model: selectedOrganismModel) {
-                    self.selectedOrganismModel = nil
+            ZStack {
+                SpriteKitContainer(
+                    onTapOrganism: { self.selection = $0 },
+                    onSceneReady: { self.hudModel = $0 }
+                )
+
+                if let selection, let network = selection.network {
+                    OrganismPopover(model: selection.model, network: network) {
+                        self.selection = nil
+                    }
+                    .background(Color.black.opacity(0.9))
+                    .cornerRadius(12)
+                    .transition(.opacity)
+                    .zIndex(1)
                 }
-                .background(Color.black.opacity(0.9))
-                .cornerRadius(12)
-                .transition(.opacity) // Add smooth appearance/disappearance
-                .zIndex(1)
             }
         }
     }
