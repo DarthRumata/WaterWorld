@@ -16,13 +16,17 @@ final class QLearningStore {
     private(set) var steps: [QLearningExperience] = []
     private(set) var batchLosses: [Double] = []
     private(set) var batchEpsilons: [Double] = []
+    private(set) var batchDays: [Int] = []
+    var currentDay: Int = 0
     private(set) var lastLoss: Double = 0
     private(set) var batchRewards: [Double] = []
     private(set) var batchMaxQs: [Double] = []
-    private(set) var episodeSurvivalRates: [Double] = []
+    private(set) var dailyHungerDeaths: [Int] = []
+    private(set) var dailyPredatorDeaths: [Int] = []
+    private var currentDayHungerDeaths: Int = 0
+    private var currentDayPredatorDeaths: Int = 0
 
     // Real-time metrics for UI
-    private(set) var lastSurvivalRate: Double = 0
     private(set) var lastAvgReward: Double = 0
     private(set) var lastAvgMaxQ: Double = 0
 
@@ -33,6 +37,7 @@ final class QLearningStore {
     func appendLoss(_ loss: Double, epsilon: Double) {
         batchLosses.append(loss)
         batchEpsilons.append(epsilon)
+        batchDays.append(currentDay)
         lastLoss = loss
     }
     
@@ -46,17 +51,31 @@ final class QLearningStore {
         lastAvgMaxQ = avgMaxQ
     }
 
-    func appendSurvivalRate(_ rate: Double) {
-        episodeSurvivalRates.append(rate)
-        lastSurvivalRate = rate
+    func recordDeath(cause: CauseOfDeath) {
+        switch cause {
+        case .energyDepletion: currentDayHungerDeaths += 1
+        case .predation: currentDayPredatorDeaths += 1
+        }
+    }
+
+    func advanceDay(to day: Int) {
+        dailyHungerDeaths.append(currentDayHungerDeaths)
+        dailyPredatorDeaths.append(currentDayPredatorDeaths)
+        currentDayHungerDeaths = 0
+        currentDayPredatorDeaths = 0
+        currentDay = day
     }
 
     func clear() {
         steps.removeAll()
         batchLosses.removeAll()
         batchEpsilons.removeAll()
+        batchDays.removeAll()
         batchRewards.removeAll()
         batchMaxQs.removeAll()
-        episodeSurvivalRates.removeAll()
+        dailyHungerDeaths.removeAll()
+        dailyPredatorDeaths.removeAll()
+        currentDayHungerDeaths = 0
+        currentDayPredatorDeaths = 0
     }
 }

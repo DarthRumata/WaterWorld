@@ -64,11 +64,9 @@ class GameScene: SKScene {
     
     private var notificationTask: Task<Void, Error>?
     
-    private var learningCycleStartDay: Int? = nil
     private var isResettingEpisode = false
     private var episodeNumber: Int = 0
-    private let learningCycleLengthDays: Int = 10
-
+    private var episodeStartDay: Int = 0
     class func newGameScene() -> GameScene {
         // Load 'GameScene.sks' as an SKScene.
         guard let scene = SKScene(fileNamed: "GameScene") as? GameScene else {
@@ -185,8 +183,7 @@ class GameScene: SKScene {
         $dayCount.sink { [weak self] in
             guard let self else { return }
             self.hudModel.dayCount = $0
-            let startDay = self.learningCycleStartDay ?? $0
-            self.hudModel.episodeDayCount = $0 - startDay
+            self.hudModel.episodeDayCount = $0 - self.episodeStartDay
             self.hudModel.episodeNumber = self.episodeNumber
         }.store(in: &cancellables)
         $simulationSpeed.sink { [weak self] in self?.hudModel.simulationSpeed = $0 }.store(in: &cancellables)
@@ -297,6 +294,7 @@ class GameScene: SKScene {
                 }
                 self.organismModels.removeValue(forKey: id)
                 self.organisms.removeValue(forKey: id)
+                QLearningStore.shared.recordDeath(cause: cause)
 
                 if self.simulationMode == .learning, self.organismModels.isEmpty {
                     self.startNewLearningEpisode()
@@ -343,8 +341,6 @@ class GameScene: SKScene {
     private func resetPopulationForLearningCycle() async {
         cancelCurrentUpdate()
         await resetOrganismsPopulation()
-        let currentDay = Int(totalTime) / Int(GlobalConstants.dayDuration)
-        learningCycleStartDay = currentDay
     }
     
     // MARK: Control state
@@ -365,10 +361,6 @@ class GameScene: SKScene {
             guard let self else { return }
             await self.resetOrganismsPopulation()
             self.gameState = .active
-            if self.simulationMode == .learning {
-                let currentDay = Int(self.totalTime) / Int(GlobalConstants.dayDuration)
-                self.learningCycleStartDay = currentDay
-            }
         }
     }
     
@@ -376,12 +368,8 @@ class GameScene: SKScene {
         switch simulationMode {
         case .normal:
             simulationMode = .learning
-            if gameState == .active {
-                learningCycleStartDay = dayCount
-            }
         case .learning:
             simulationMode = .normal
-            learningCycleStartDay = nil
         }
     }
     
@@ -409,16 +397,15 @@ class GameScene: SKScene {
         
         speed = simulationSpeed
         physicsWorld.speed = simulationSpeed
-        dayCount = Int(totalTime) / Int(GlobalConstants.dayDuration)
+        let newDayCount = Int(totalTime) / Int(GlobalConstants.dayDuration)
+        if newDayCount != dayCount {
+            QLearningStore.shared.advanceDay(to: newDayCount)
+        }
+        dayCount = newDayCount
         
         // Plan attacks at the beginning of night
         predationManager.ensurePlanIfNight(dayProgress: dayProgress)
         
-        if simulationMode == .learning {
-            if let startDay = learningCycleStartDay, dayCount - startDay >= learningCycleLengthDays {
-                startNewLearningEpisode()
-            }
-        }
         
         // Replaced predation + notification calls with a combined single tick pass on the main actor
         // Run a single combined tick pass (predation + notifications) on the main actor
@@ -434,6 +421,7 @@ class GameScene: SKScene {
         guard !isResettingEpisode else { return }
         isResettingEpisode = true
         episodeNumber += 1
+        episodeStartDay = dayCount
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.finishCurrentLearningEpisode()
@@ -446,8 +434,6 @@ class GameScene: SKScene {
         for model in organismModels.values {
             await model.finishEpisodeSurvived()
         }
-        let survivalRate = Double(organismModels.count) / Double(GlobalConstants.initialPopulation)
-        QLearningStore.shared.appendSurvivalRate(survivalRate)
     }
     
     @MainActor

@@ -51,15 +51,17 @@ struct NeuralNetworkView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text(name)
+                    .font(.title3).bold()
                     .lineLimit(1)
                     .truncationMode(.tail)
-
-                Spacer(minLength: 8)
+                    .frame(maxWidth: .infinity, alignment: .center)
 
                 CloseButton {
                     onTapCloseButton()
                 }
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
             .frame(width: constrainedWidth)
 
             ScrollView([.vertical, .horizontal], showsIndicators: true) {
@@ -71,13 +73,22 @@ struct NeuralNetworkView: View {
                             LayerView(neurons: layer.neurons, activation: layer.activation, layerIndex: layerIndex)
                         }
 
-                        HStack(spacing: 10) {
-                            Spacer().frame(width: 70)
-                            Text("Up").frame(width: 70).multilineTextAlignment(.center).foregroundColor(.white)
-                            Text("Down").frame(width: 70).multilineTextAlignment(.center).foregroundColor(.white)
-                            Text("Wait").frame(width: 70).multilineTextAlignment(.center).foregroundColor(.white)
+                        HStack(alignment: .top, spacing: 5) {
+                            // Invisible placeholder matching LayerView label width
+                            Text("Layer 3 • Linear")
+                                .padding(4)
+                                .opacity(0)
+                            Spacer()
+                            HStack(spacing: 10) {
+                                ForEach(["Up", "Down", "Wait"], id: \.self) { label in
+                                    Text(label)
+                                        .frame(width: 30)
+                                        .multilineTextAlignment(.center)
+                                        .foregroundColor(.white)
+                                }
+                            }
+                            Spacer()
                         }
-                        .padding(.leading, 50)
                     }
                 }
                 .padding(15)
@@ -104,14 +115,9 @@ struct NeuralNetworkView: View {
 
     // Read from AsyncStream
     private func readFromStream() async {
-        if viewModel == nil {
-            let initial = SensorInput(lightLevel: 0, depth: 0, dayProgress: 0, energy: 0)
-            viewModel = generateViewModel(for: initial)
-            lastUIUpdate = Date.timeIntervalSinceReferenceDate
-        }
         for await input in inputStream {
             let now = Date.timeIntervalSinceReferenceDate
-            if now - lastUIUpdate >= minUIUpdateInterval {
+            if viewModel == nil || now - lastUIUpdate >= minUIUpdateInterval {
                 viewModel = generateViewModel(for: input)
                 lastUIUpdate = now
             }

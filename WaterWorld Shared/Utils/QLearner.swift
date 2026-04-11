@@ -42,6 +42,7 @@ actor QLearner {
     private let targetUpdateInterval: Int = 10
     private let surpriseRatio: Double = 0.25
     private let surpriseThreshold: Double = 2.0
+    private let deathPenalty: Double = -120
 
     private var normalBuffer: [QLearningExperience] = []
     private var normalBufferIndex: Int = 0
@@ -65,7 +66,7 @@ actor QLearner {
     }
     
     func reportExperience(currentState: SensorInput, nextState: SensorInput?, actionIndex: Int, didDie: Bool) {
-        let reward = calculateReward(currentState: currentState, nextState: nextState, didDie: didDie)
+        let reward = calculateReward(nextState: nextState)
         let step = QLearningExperience(
             state: currentState,
             actionIndex: actionIndex,
@@ -213,16 +214,9 @@ actor QLearner {
         targetNetwork = network
     }
 	
-	private func calculateReward(currentState: SensorInput, nextState: SensorInput?, didDie: Bool) -> Double {
-		if let nextState {
-			// Доля энергии от 0.0 до 1.0
-			let energyFraction = nextState.energy / GlobalConstants.maxEnergy
-			
-			// Смещаем в диапазон от -1.0 (голод) до +1.0 (сытость)
-			return (energyFraction * 2.0) - 1.0
-		} else {
-			return currentState.energy > 0 && !didDie ? 100 : -100
-		}
+	private func calculateReward(nextState: SensorInput?) -> Double {
+        guard let nextState else { return deathPenalty }
+        return (nextState.energy / GlobalConstants.maxEnergy) * 2.0 - 1.0
 	}
 }
 

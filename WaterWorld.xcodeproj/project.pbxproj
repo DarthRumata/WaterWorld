@@ -49,7 +49,6 @@
 				UI/GameHUDView.swift,
 				UI/MainView.swift,
 				UI/MetricsChartView.swift,
-				UI/MetricsOverlayView.swift,
 				UI/Organism.swift,
 				UI/OrganismPopover/LayerView.swift,
 				UI/OrganismPopover/NeuralNetworkView.swift,
