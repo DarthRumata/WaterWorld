@@ -36,10 +36,12 @@ struct NeuronView: View {
                     .stroke(Color.white, lineWidth: 1)
             )
             .overlay {
-                let style = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(2))
-                let value = style.format(neuron.output)
-                Text(value)
+                Text(String(format: "%.2f", neuron.output))
+                    .font(.system(size: 8, weight: .medium))
+                    .minimumScaleFactor(0.5)
+                    .lineLimit(1)
                     .foregroundColor(valueTextColor)
+                    .padding(2)
             }
             .animation(.easeInOut(duration: 0.25), value: neuron.intensity)
             .help(helpText)

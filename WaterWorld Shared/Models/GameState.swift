@@ -9,5 +9,4 @@ enum GameState {
     case stopped
     case active
     case paused
-    case training
 }

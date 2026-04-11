@@ -51,16 +51,20 @@ extension NeuralNetwork {
 extension NeuralNetworkSnapshot {
     static let defaultFileName = "neural_network.json"
 
-    static func save(_ snapshot: NeuralNetworkSnapshot, to fileName: String = defaultFileName) throws {
-        let url = try storageURL(for: fileName)
-        let data = try JSONEncoder().encode(snapshot)
-        try data.write(to: url)
+    static func save(_ snapshot: NeuralNetworkSnapshot, to url: URL) throws {
+        try JSONEncoder().encode(snapshot).write(to: url)
     }
 
-    static func load(from fileName: String = defaultFileName) throws -> NeuralNetworkSnapshot {
-        let url = try storageURL(for: fileName)
-        let data = try Data(contentsOf: url)
-        return try JSONDecoder().decode(NeuralNetworkSnapshot.self, from: data)
+    static func load(from url: URL) throws -> NeuralNetworkSnapshot {
+        try JSONDecoder().decode(NeuralNetworkSnapshot.self, from: Data(contentsOf: url))
+    }
+
+    static func save(_ snapshot: NeuralNetworkSnapshot, named fileName: String = defaultFileName) throws {
+        try save(snapshot, to: storageURL(for: fileName))
+    }
+
+    static func load(named fileName: String = defaultFileName) throws -> NeuralNetworkSnapshot {
+        try load(from: storageURL(for: fileName))
     }
 
     static func storageURL(for fileName: String) throws -> URL {

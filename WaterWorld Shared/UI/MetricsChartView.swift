@@ -39,32 +39,23 @@ struct MetricsChartView: View {
         switch selectedTab {
         case .loss:
             MetricLineChart(
-                data: store.batchLosses,
-                label: "Loss",
-                color: .red,
-                xLabel: "Training step"
+                data: store.batchLosses, label: "Loss", color: .red,
+                xLabel: "Training step", companion: (store.batchEpsilons, "ε", .purple)
             )
         case .reward:
             MetricLineChart(
-                data: store.batchRewards,
-                label: "Avg Reward",
-                color: .blue,
-                xLabel: "Training step"
+                data: store.batchRewards, label: "Avg Reward", color: .blue,
+                xLabel: "Training step", companion: (store.batchEpsilons, "ε", .purple)
             )
         case .maxQ:
             MetricLineChart(
-                data: store.batchMaxQs,
-                label: "Avg Max Q",
-                color: .green,
-                xLabel: "Training step"
+                data: store.batchMaxQs, label: "Avg Max Q", color: .green,
+                xLabel: "Training step", companion: (store.batchEpsilons, "ε", .purple)
             )
         case .survival:
             MetricLineChart(
                 data: store.episodeSurvivalRates.map { $0 * 100 },
-                label: "Survival %",
-                color: .orange,
-                xLabel: "Episode",
-                yFormat: "%.0f%%"
+                label: "Survival %", color: .orange, xLabel: "Episode", yFormat: "%.0f%%"
             )
         }
     }
@@ -76,6 +67,9 @@ private struct MetricLineChart: View {
     let color: Color
     let xLabel: String
     var yFormat: String = "%.2f"
+    var companion: ([Double], String, Color)? = nil
+
+    @State private var selectedStep: Int?
 
     private struct Point: Identifiable {
         let id: Int
@@ -94,16 +88,40 @@ private struct MetricLineChart: View {
                 Spacer()
             }
         } else {
-            Chart(points) { point in
-                LineMark(
-                    x: .value(xLabel, point.id),
-                    y: .value(label, point.value)
-                )
-                .foregroundStyle(color)
-                .interpolationMethod(.catmullRom)
+            VStack(spacing: 4) {
+                Chart {
+                    ForEach(points) { point in
+                        LineMark(x: .value(xLabel, point.id), y: .value(label, point.value))
+                            .foregroundStyle(color)
+                            .interpolationMethod(.catmullRom)
+                    }
+                    if let step = selectedStep, step < points.count {
+                        RuleMark(x: .value(xLabel, step))
+                            .foregroundStyle(.secondary.opacity(0.5))
+                    }
+                }
+                .chartXAxisLabel(xLabel)
+                .chartYAxisLabel(label)
+                .chartXSelection(value: $selectedStep)
+
+                // Fixed-height tooltip zone — no layout shift
+                HStack(spacing: 16) {
+                    if let step = selectedStep, step < points.count {
+                        Text("Step \(step)")
+                            .foregroundStyle(.secondary)
+                        Text("\(label): \(String(format: yFormat, points[step].value))")
+                            .foregroundStyle(color)
+                        if let (cData, cLabel, cColor) = companion, step < cData.count {
+                            Text("\(cLabel): \(String(format: "%.3f", cData[step]))")
+                                .foregroundStyle(cColor)
+                        }
+                    } else {
+                        Text(" ")  // keeps height stable
+                    }
+                }
+                .font(.caption)
+                .frame(height: 16)
             }
-            .chartXAxisLabel(xLabel)
-            .chartYAxisLabel(label)
         }
     }
 }

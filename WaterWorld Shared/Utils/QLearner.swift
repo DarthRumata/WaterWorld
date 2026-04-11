@@ -16,60 +16,52 @@ struct QLearningExperience: Identifiable, Sendable {
 }
 
 actor QLearner {
-    var mainNetwork = NeuralNetworkBuilder(inputSize: 4)
-        .dense(10, activation: .relu)
-        .dense(10, activation: .relu)
-        .dense(3, activation: .linear)
-        .build(weightInitStrategy: .uniformXavier)
+    static func makeNetwork() -> NeuralNetwork {
+        NeuralNetworkBuilder(inputSize: 4)
+            .dense(10, activation: .relu)
+            .dense(10, activation: .relu)
+            .dense(3, activation: .linear)
+            .build(weightInitStrategy: .uniformXavier)
+    }
+
+    var mainNetwork = QLearner.makeNetwork()
+    private var targetNetwork = QLearner.makeNetwork()
     
-    private var targetNetwork = NeuralNetworkBuilder(inputSize: 4)
-        .dense(10, activation: .relu)
-        .dense(10, activation: .relu)
-        .dense(3, activation: .linear)
-        .build(weightInitStrategy: .uniformXavier)
-    
+    private var networkUpdateHandler: (@Sendable (NeuralNetwork, Double) async -> Void)?
+
     private let batchSize: Int
 	private var epsilonGreedy: Double
 	private let gamma: Double
 	private let learningRate: Double
-    private let simulationController: SimulationControlling?
 	
-	private let maxBufferSize: Int = 100000
-	private let trainInterval = 960
-	private let epsilonMin: Double = 0.01
-	private let epsilonDecay: Double = 0.995
-	private let targetUpdateInterval: Int = 100
-	
-	private var expirienceBuffer: [QLearningExperience] = []
-	private var stepsSinceLastTrain = 0
-	private var learningStepsCount = 0
+    private let maxBufferSize: Int = 350000
+    private let maxSurpriseBufferSize: Int = 50000
+    private let trainInterval = 960
+    private let epsilonMin: Double = 0.04
+    private let epsilonDecay: Double = 0.995
+    private let targetUpdateInterval: Int = 10
+    private let surpriseRatio: Double = 0.25
+    private let surpriseThreshold: Double = 2.0
+
+    private var normalBuffer: [QLearningExperience] = []
+    private var normalBufferIndex: Int = 0
+    private var surpriseBuffer: [QLearningExperience] = []
+    private var surpriseBufferIndex: Int = 0
+    private var stepsSinceLastTrain = 0
+    private var learningStepsCount = 0
 
     
-    init(epsilonGreedy: Double, gamma: Double, batchSize: Int = 64, learningRate: Double = 0.01, simulationController: SimulationControlling? = nil) {
+    init(epsilonGreedy: Double, gamma: Double, batchSize: Int = 64, learningRate: Double = 0.01) {
         self.epsilonGreedy = epsilonGreedy
         self.gamma = gamma
         self.batchSize = batchSize
         self.learningRate = learningRate
-        self.simulationController = simulationController
     }
-    
-    func provideActionIndex(for input: SensorInput) -> Int {
-        if Double.random(in: 0..<1) < epsilonGreedy {
-            return Int.random(in: 0..<OrganismModel.Action.allCases.count)
-        }
-        
-        let inputs = input.normalized
-        let q = mainNetwork.predict(inputs: inputs)
-        
-        var bestQIndex = 0
-        var maxQ = Double.leastNormalMagnitude
-        for (i, maxQForAction) in q.enumerated() {
-            if maxQForAction > maxQ {
-                maxQ = maxQForAction
-                bestQIndex = i
-            }
-        }
-        return bestQIndex
+
+    var currentEpsilon: Double { epsilonGreedy }
+
+    func setNetworkUpdateHandler(_ handler: @escaping @Sendable (NeuralNetwork, Double) async -> Void) {
+        networkUpdateHandler = handler
     }
     
     func reportExperience(currentState: SensorInput, nextState: SensorInput?, actionIndex: Int, didDie: Bool) {
@@ -81,15 +73,16 @@ actor QLearner {
             nextState: nextState
         )
         
-        expirienceBuffer.append(step)
-		
-		if expirienceBuffer.count > maxBufferSize {
-			expirienceBuffer.removeFirst()
-		}
-			
-		stepsSinceLastTrain += 1
-        
-		if expirienceBuffer.count >= batchSize && stepsSinceLastTrain >= trainInterval {
+        if normalBuffer.count < maxBufferSize {
+            normalBuffer.append(step)
+        } else {
+            normalBuffer[normalBufferIndex] = step
+            normalBufferIndex = (normalBufferIndex + 1) % maxBufferSize
+        }
+
+        stepsSinceLastTrain += 1
+
+        if normalBuffer.count >= batchSize && stepsSinceLastTrain >= trainInterval {
 			stepsSinceLastTrain = 0 // Сбрасываем счетчик
 			
 			Task { [weak self] in
@@ -103,23 +96,17 @@ actor QLearner {
 		}
     }
     
-	private func trainOnMiniBatch() async {
-		var batch: [QLearningExperience] = []
-		for _ in 0..<batchSize {
-			if let randomStep = expirienceBuffer.randomElement() {
-				batch.append(randomStep)
-			}
-		}
-
-        // Capture the reference before any suspension to avoid sending across awaits
-        let controller = simulationController
-        // Pause on the main actor (async-safe)
-        await controller?.startTraining()
-
-        defer {
-            Task { @MainActor [controller] in
-                await controller?.finishTraining()
-            }
+    private func trainOnMiniBatch() async {
+        let wantedSurprise = Int(Double(batchSize) * surpriseRatio)
+        let actualSurprise = min(wantedSurprise, surpriseBuffer.count)
+        let normalCount = batchSize - actualSurprise
+        var batch: [QLearningExperience] = []
+        batch.reserveCapacity(batchSize)
+        for _ in 0..<normalCount {
+            if let step = normalBuffer.randomElement() { batch.append(step) }
+        }
+        for _ in 0..<actualSurprise {
+            if let step = surpriseBuffer.randomElement() { batch.append(step) }
         }
 
         await learn(from: batch)
@@ -181,24 +168,38 @@ actor QLearner {
 
         for (step, target) in zip(batch, targets) {
             let inputs = step.state.normalized
-			let predicted = mainNetwork.predict(inputs: inputs)
+            let predicted = mainNetwork.predict(inputs: inputs)
+            let tdError = abs(predicted[step.actionIndex] - target)
             var error = Array(repeating: 0.0, count: predicted.count)
             error[step.actionIndex] = predicted[step.actionIndex] - target
             mainNetwork.backward(error: error, inputs: inputs, learningRate: learningRate)
+
+            if tdError > surpriseThreshold {
+                if surpriseBuffer.count < maxSurpriseBufferSize {
+                    surpriseBuffer.append(step)
+                } else {
+                    surpriseBuffer[surpriseBufferIndex] = step
+                    surpriseBufferIndex = (surpriseBufferIndex + 1) % maxSurpriseBufferSize
+                }
+            }
         }
 		
 		learningStepsCount += 1
 		epsilonGreedy = max(epsilonMin, epsilonGreedy * epsilonDecay)
-		// Жестко копируем веса каждые N шагов (например, 10 или 50)
-		if learningStepsCount % 10 == 0 {
+        if learningStepsCount % targetUpdateInterval == 0 {
 			targetNetwork = mainNetwork
 		}
 
         let avgReward = batch.map { $0.reward }.reduce(0, +) / Double(batch.count)
         let avgMaxQ = maxQSum / Double(batch.count)
 
+        let net = mainNetwork
+        let eps = epsilonGreedy
+        let handler = networkUpdateHandler
+        Task { await handler?(net, eps) }
+
         Task { @MainActor in
-            QLearningStore.shared.appendLoss(mseLoss)
+            QLearningStore.shared.appendLoss(mseLoss, epsilon: eps)
             QLearningStore.shared.appendRewardTrend(avgReward)
             QLearningStore.shared.appendMaxQTrend(avgMaxQ)
         }
@@ -211,18 +212,21 @@ actor QLearner {
         mainNetwork = network
         targetNetwork = network
     }
+	
+	private func calculateReward(currentState: SensorInput, nextState: SensorInput?, didDie: Bool) -> Double {
+		if let nextState {
+			// Доля энергии от 0.0 до 1.0
+			let energyFraction = nextState.energy / GlobalConstants.maxEnergy
+			
+			// Смещаем в диапазон от -1.0 (голод) до +1.0 (сытость)
+			return (energyFraction * 2.0) - 1.0
+		} else {
+			return currentState.energy > 0 && !didDie ? 100 : -100
+		}
+	}
+}
 
-    private func calculateReward(currentState: SensorInput, nextState: SensorInput?, didDie: Bool) -> Double {
-        if let nextState {
-            let energyDelta = nextState.energy - currentState.energy
-            if energyDelta < 0 {
-                return energyDelta * 0.5
-            } else {
-                return energyDelta
-            }
-        } else {
-            return currentState.energy > 0 && !didDie ? 100 : -100
-        }
-    }
+private func zip3<A, B, C>(_ a: [A], _ b: [B], _ c: [C]) -> [(A, B, C)] {
+    zip(a, zip(b, c)).map { ($0.0, $0.1.0, $0.1.1) }
 }
 

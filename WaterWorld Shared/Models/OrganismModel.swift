@@ -122,6 +122,10 @@ actor OrganismModel: Equatable {
     func finishEpisodeSurvived() async {
         await brain.finishEpisode(didDie: false)
     }
+
+    func updateBrainNetwork(_ network: NeuralNetwork, epsilon: Double) async {
+        await brain.updatePolicy(network: network, epsilon: epsilon)
+    }
     
     // Private logic
     

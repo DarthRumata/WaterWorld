@@ -15,6 +15,7 @@ final class QLearningStore {
 
     private(set) var steps: [QLearningExperience] = []
     private(set) var batchLosses: [Double] = []
+    private(set) var batchEpsilons: [Double] = []
     private(set) var lastLoss: Double = 0
     private(set) var batchRewards: [Double] = []
     private(set) var batchMaxQs: [Double] = []
@@ -29,8 +30,9 @@ final class QLearningStore {
         steps.append(step)
     }
 
-    func appendLoss(_ loss: Double) {
+    func appendLoss(_ loss: Double, epsilon: Double) {
         batchLosses.append(loss)
+        batchEpsilons.append(epsilon)
         lastLoss = loss
     }
     
@@ -52,6 +54,7 @@ final class QLearningStore {
     func clear() {
         steps.removeAll()
         batchLosses.removeAll()
+        batchEpsilons.removeAll()
         batchRewards.removeAll()
         batchMaxQs.removeAll()
         episodeSurvivalRates.removeAll()

@@ -162,7 +162,7 @@ class UIPanel: SKNode {
         gameState
             .sink { [weak self] state in
                 guard let self else { return }
-                self.pauseButton?.fontColor = (state == .stopped || state == .training) ? .gray : Constants.textColor
+                self.pauseButton?.fontColor = state == .stopped ? .gray : Constants.textColor
                 self.pauseButton?.text = state == .active ? "Pause" : "Resume"
             }
             .store(in: &cancellables)

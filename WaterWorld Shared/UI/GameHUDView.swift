@@ -43,7 +43,13 @@ struct GameHUDView: View {
 
     private var leftPanel: some View {
         VStack(alignment: .leading, spacing: HUD.spacing) {
-            hudText("Day: \(hud.dayCount)")
+            HStack(spacing: 12) {
+                hudText("Day: \(hud.dayCount)").fixedSize()
+                if hud.simulationMode == .learning {
+                    hudText("Ep: \(hud.episodeNumber)").fixedSize()
+                    hudText("Ep.D: \(hud.episodeDayCount)").fixedSize()
+                }
+            }
             hudText("Org: \(hud.organismsCount)")
             Spacer()
             let store = QLearningStore.shared
@@ -64,7 +70,7 @@ struct GameHUDView: View {
                 hudText(formattedTime)
             }
             DayNightTimelineView(dayProgress: hud.dayProgress)
-                .frame(width: 360, height: 40)
+                .frame(width: 80, height: 80)
                 .animation(.linear(duration: HUD.tickDuration / hud.simulationSpeed), value: hud.dayProgress)
             Spacer()
         }
@@ -84,6 +90,11 @@ struct GameHUDView: View {
             hudButton("Restart", action: hud.onRestart)
             pauseButton
             hudButton("Report", action: hud.onReport)
+            Divider()
+            HStack(spacing: 8) {
+                hudButton("Save NN", action: hud.onSaveNetwork)
+                hudButton("Load NN", action: hud.onLoadNetwork)
+            }
             SegmentedButtons(
                 options: ["Normal", "Learning"],
                 selectedIndex: hud.simulationMode == .normal ? 0 : 1,
@@ -104,12 +115,10 @@ struct GameHUDView: View {
     }
 
     private var pauseButton: some View {
-        let isTraining = hud.gameState == .training
         let isStopped = hud.gameState == .stopped
         let label = hud.gameState == .active ? "Pause" : "Resume"
         return hudButton(label, action: hud.onPause)
-            .disabled(isTraining || isStopped)
-            .opacity(isTraining ? 0.4 : 1.0)
+            .disabled(isStopped)
     }
 
     // MARK: - Helpers
@@ -169,38 +178,49 @@ private struct SegmentedButtons: View {
 private struct DayNightTimelineView: View {
     let dayProgress: Double
 
+    private var angle: Double { 2 * .pi * dayProgress - .pi }
+    private var isDay: Bool { dayProgress <= 0.5 }
+
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
-            let midY = geo.size.height / 2
-            let sunX = (dayProgress / 0.5).clamped(to: 0...1) * w
-            let moonX = ((dayProgress - 0.5) / 0.5).clamped(to: 0...1) * w
+            let h = geo.size.height
+            let size = min(w, h)
+            let cx = w / 2
+            let cy = h / 2
+            let radius = size / 2 - HUD.celestialSize / 2
+            let x = cx + radius * cos(angle)
+            let y = cy + radius * sin(angle)
 
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .frame(height: 4)
-                    .foregroundStyle(.secondary.opacity(0.6))
-                celestialBody(color: .yellow, shadowColor: .yellow, shadowRadius: 6, x: sunX, y: midY)
-                    .opacity(dayProgress <= 0.5 ? 1 : 0)
-                celestialBody(color: .white, shadowColor: .gray, shadowRadius: 3, x: moonX, y: midY)
-                    .opacity(dayProgress > 0.5 ? 1 : 0)
+            ZStack {
+                // Ring centered on body path
+                Circle()
+                    .stroke(
+                        AngularGradient(
+                            colors: [.orange.opacity(0.5), .blue.opacity(0.2), .black.opacity(0.5), .blue.opacity(0.2), .orange.opacity(0.5)],
+                            center: .center,
+                            startAngle: .degrees(-90),
+                            endAngle: .degrees(270)
+                        ),
+                        lineWidth: 3
+                    )
+                    .padding(HUD.celestialSize / 2)
+
+                // Horizon line
+                Path { path in
+                    path.move(to: CGPoint(x: cx - radius, y: cy))
+                    path.addLine(to: CGPoint(x: cx + radius, y: cy))
+                }
+                .stroke(Color.secondary.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+
+                // Sun or moon
+                Circle()
+                    .frame(width: HUD.celestialSize, height: HUD.celestialSize)
+                    .foregroundStyle(isDay ? Color.yellow : Color.white)
+                    .shadow(color: isDay ? .yellow : .gray, radius: isDay ? 6 : 3)
+                    .position(x: x, y: y)
             }
         }
     }
-
-    private func celestialBody(color: Color, shadowColor: Color, shadowRadius: CGFloat, x: CGFloat, y: CGFloat) -> some View {
-        Circle()
-            .frame(width: HUD.celestialSize, height: HUD.celestialSize)
-            .foregroundStyle(color)
-            .shadow(color: shadowColor, radius: shadowRadius)
-            .position(x: x, y: y)
-    }
 }
 
-// MARK: - Extensions
-
-private extension Double {
-    func clamped(to range: ClosedRange<Double>) -> Double {
-        min(max(self, range.lowerBound), range.upperBound)
-    }
-}

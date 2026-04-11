@@ -25,6 +25,7 @@ struct QLearningReportView: View {
             HStack {
                 Text("Q-Learning Report").font(.title2).bold()
                 Spacer()
+                Button("Copy") { copyToClipboard() }
                 Button("Clear") { store.clear() }
             }
             .padding(.bottom, 8)
@@ -51,6 +52,19 @@ struct QLearningReportView: View {
             .frame(minHeight: 300)
         }
         .padding(12)
+    }
+
+    private func copyToClipboard() {
+        let header = "#\tState (E,L,D,P)\tAction\tReward\tNext Energy"
+        let lines = store.steps.enumerated().map { i, exp -> String in
+            let s = exp.state
+            let state = String(format: "%.2f, %.2f, %.2f, %.2f", s.energy, Double(s.lightLevel), Double(s.depth), Double(s.dayProgress))
+            let nextEnergy = exp.nextState.map { String(format: "%.2f", $0.energy) } ?? "—"
+            return "\(i)\t\(state)\t\(exp.actionIndex)\t\(String(format: "%.2f", exp.reward))\t\(nextEnergy)"
+        }
+        let text = ([header] + lines).joined(separator: "\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 }
 

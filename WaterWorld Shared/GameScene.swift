@@ -65,6 +65,8 @@ class GameScene: SKScene {
     private var notificationTask: Task<Void, Error>?
     
     private var learningCycleStartDay: Int? = nil
+    private var isResettingEpisode = false
+    private var episodeNumber: Int = 0
     private let learningCycleLengthDays: Int = 10
 
     class func newGameScene() -> GameScene {
@@ -94,9 +96,25 @@ class GameScene: SKScene {
         self.qLearner = QLearner(
             epsilonGreedy: 1.0,
             gamma: 0.99,
-            batchSize: 128,
-            simulationController: self
+            batchSize: 128
         )
+
+        Task { [weak self] in
+            guard let self else { return }
+            await self.qLearner.setNetworkUpdateHandler { [weak self] network, epsilon in
+                await self?.propagateNetwork(network, epsilon: epsilon)
+            }
+        }
+    }
+
+    @MainActor
+    private func propagateNetwork(_ network: NeuralNetwork, epsilon: Double) async {
+        let models = Array(organismModels.values)
+        await withTaskGroup(of: Void.self) { group in
+            for model in models {
+                group.addTask { await model.updateBrainNetwork(network, epsilon: epsilon) }
+            }
+        }
     }
     
     override func update(_ currentTime: TimeInterval) {
@@ -164,7 +182,13 @@ class GameScene: SKScene {
             }
             .store(in: &cancellables)
 
-        $dayCount.sink { [weak self] in self?.hudModel.dayCount = $0 }.store(in: &cancellables)
+        $dayCount.sink { [weak self] in
+            guard let self else { return }
+            self.hudModel.dayCount = $0
+            let startDay = self.learningCycleStartDay ?? $0
+            self.hudModel.episodeDayCount = $0 - startDay
+            self.hudModel.episodeNumber = self.episodeNumber
+        }.store(in: &cancellables)
         $simulationSpeed.sink { [weak self] in self?.hudModel.simulationSpeed = $0 }.store(in: &cancellables)
         $lightLevel.sink { [weak self] in self?.hudModel.lightLevel = $0 }.store(in: &cancellables)
         $gameState.sink { [weak self] in self?.hudModel.gameState = $0 }.store(in: &cancellables)
@@ -199,6 +223,31 @@ class GameScene: SKScene {
         hudModel.onToggleMode = { [weak self] in self?.toggleSimulationMode() }
         hudModel.onSelectPredatorsIntensity = { [weak self] intensity in self?.setPredatorsIntensity(intensity) }
         hudModel.onTapMetric = { [weak self] tab in self?.presentMetricsChart(tab: tab) }
+        hudModel.onSaveNetwork = { [weak self] in
+            guard let self else { return }
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.json]
+            panel.nameFieldStringValue = NeuralNetworkSnapshot.defaultFileName
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            Task {
+                let snapshot = await self.qLearner.mainNetwork.makeSnapshot()
+                try? NeuralNetworkSnapshot.save(snapshot, to: url)
+            }
+        }
+        hudModel.onLoadNetwork = { [weak self] in
+            guard let self else { return }
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [.json]
+            panel.allowsMultipleSelection = false
+            guard panel.runModal() == .OK, let url = panel.url else { return }
+            Task {
+                guard let snapshot = try? NeuralNetworkSnapshot.load(from: url) else { return }
+                try? await self.qLearner.applySnapshot(snapshot)
+                let network = await self.qLearner.mainNetwork
+                let epsilon = await self.qLearner.currentEpsilon
+                await self.propagateNetwork(network, epsilon: epsilon)
+            }
+        }
     }
     
     private func addContainer() {
@@ -211,7 +260,14 @@ class GameScene: SKScene {
         addChild(container)
     }
     
-    private func addOrganisms() {
+    private func addOrganisms() async {
+        let initialNetwork = await qLearner.mainNetwork
+        let initialEpsilon = await qLearner.currentEpsilon
+        spawnOrganisms(network: initialNetwork, epsilon: initialEpsilon)
+    }
+
+    @MainActor
+    private func spawnOrganisms(network: NeuralNetwork, epsilon: Double) {
         for i in 0 ..< GlobalConstants.initialPopulation {
             let xPosition = CGFloat.random(in: 10...container.size.width - 10)
             let yPosition = CGFloat.random(in: 10...container.size.height - 10)
@@ -220,9 +276,14 @@ class GameScene: SKScene {
             let baseColor = SKColor.green
             let logger: Logger = i == 0 ? ConsoleLogger() : EmptyLogger()
             let tracker = OrganismTracker(logger: logger)
-            
+
             let model = OrganismModel(
-                brain: QBrain(qLearner: self.qLearner),
+                brain: QBrain(
+                    reportExperience: { [weak self] state, next, action, died in
+                        await self?.qLearner.reportExperience(currentState: state, nextState: next, actionIndex: action, didDie: died)
+                    },
+                    agentPolicy: AgentPolicy(network: network, epsilon: epsilon)
+                ),
                 name: nameGenerator.generateName() ?? "\(i)",
                 logger: logger,
                 tracker: tracker
@@ -269,26 +330,19 @@ class GameScene: SKScene {
         }
     }
     
-    private func resetOrganismsPopulation() {
-        // Remove existing organisms
+    private func resetOrganismsPopulation() async {
         for (_, organism) in organisms {
             organism.removeFromParent()
         }
         organismModels.removeAll()
         organisms.removeAll()
-        
-        // Regenerate names and repopulate
         nameGenerator.regenerate()
-        addOrganisms()
+        await addOrganisms()
     }
-    
-    private func resetPopulationForLearningCycle() {
-        // Keep simulation running but cancel any in-flight notifications
+
+    private func resetPopulationForLearningCycle() async {
         cancelCurrentUpdate()
-        
-        resetOrganismsPopulation()
-        
-        // Continue the learning cycles from the current day
+        await resetOrganismsPopulation()
         let currentDay = Int(totalTime) / Int(GlobalConstants.dayDuration)
         learningCycleStartDay = currentDay
     }
@@ -296,13 +350,8 @@ class GameScene: SKScene {
     // MARK: Control state
     
     private func restartSimulation() {
-        // Stop updates
         gameState = .stopped
-
         cancelCurrentUpdate()
-
-        // Reset organisms only (preserve totalTime and derived counters)
-        resetOrganismsPopulation()
 
         if simulationMode == .normal {
             totalTime = 0
@@ -312,12 +361,14 @@ class GameScene: SKScene {
             deathMarkerManager?.clearAll()
         }
 
-        // Resume
-        gameState = .active
-
-        if simulationMode == .learning {
-            let currentDay = Int(totalTime) / Int(GlobalConstants.dayDuration)
-            learningCycleStartDay = currentDay
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.resetOrganismsPopulation()
+            self.gameState = .active
+            if self.simulationMode == .learning {
+                let currentDay = Int(self.totalTime) / Int(GlobalConstants.dayDuration)
+                self.learningCycleStartDay = currentDay
+            }
         }
     }
     
@@ -380,10 +431,14 @@ class GameScene: SKScene {
     }
     
     private func startNewLearningEpisode() {
+        guard !isResettingEpisode else { return }
+        isResettingEpisode = true
+        episodeNumber += 1
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.finishCurrentLearningEpisode()
-            self.resetPopulationForLearningCycle()
+            await self.resetPopulationForLearningCycle()
+            self.isResettingEpisode = false
         }
     }
 
@@ -419,7 +474,7 @@ class GameScene: SKScene {
 
         // Notify organisms using the original pairs snapshot
         for (model, view, depth) in pairs {
-            // Skip if this model/view was removed by predation above
+            guard !Task.isCancelled else { return }
             guard organismModels[model.id] != nil, organisms[view.id] != nil else { continue }
 
             view.speed = simulationSpeed
@@ -557,20 +612,6 @@ extension GameScene: SimulationControlling {
         }
     }
 
-    func startTraining() async {
-        await MainActor.run {
-            guard gameState == .active else { return }
-            gameState = .training
-            cancelCurrentUpdate()
-        }
-    }
-
-    func finishTraining() async {
-        await MainActor.run {
-            guard gameState == .training else { return }
-            gameState = .active
-        }
-    }
 }
 
 #if os(OSX)

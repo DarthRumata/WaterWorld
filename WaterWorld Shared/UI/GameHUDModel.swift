@@ -11,6 +11,8 @@ import Observation
 final class GameHUDModel {
     // MARK: - State
     var dayCount: Int = 0
+    var episodeNumber: Int = 0
+    var episodeDayCount: Int = 0
     var organismsCount: Int = 0
     var simulationSpeed: TimeInterval = 1.0
     var lightLevel: Double = 0
@@ -28,4 +30,6 @@ final class GameHUDModel {
     var onToggleMode: () -> Void = {}
     var onSelectPredatorsIntensity: (PredatorsIntensity) -> Void = { _ in }
     var onTapMetric: (MetricTab) -> Void = { _ in }
+    var onSaveNetwork: () -> Void = {}
+    var onLoadNetwork: () -> Void = {}
 }
