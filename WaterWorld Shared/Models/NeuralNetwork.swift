@@ -139,6 +139,16 @@ struct NeuralNetwork: Sendable {
         return warnings
     }
 
+    /// Polyak averaging: θ_self = τ·θ_main + (1−τ)·θ_self
+    /// Applied per-weight every training step for smooth target tracking.
+    mutating func polyakBlend(toward main: NeuralNetwork, tau: Double) {
+        for l in layers.indices {
+            for n in layers[l].neurons.indices {
+                layers[l].neurons[n].polyakBlend(toward: main.layers[l].neurons[n], tau: tau)
+            }
+        }
+    }
+
     mutating func backward(error: [Double], inputs: [Double], learningRate: Double) {
         // Forward pass: cache inputs and pre-activation z values per layer
         struct LayerCache {

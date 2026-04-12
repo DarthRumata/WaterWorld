@@ -32,9 +32,9 @@ actor QLearner {
 
     private let batchSize: Int
 	private var epsilonGreedy: Double
-	private let gamma: Double
+    private(set) var gamma: Double
 	private let learningRate: Double
-    private let deltaWeight: Double
+    private(set) var deltaWeight: Double
     private var costFunction: any CostFunction
     private let energyCalculator = EnergyCalculator()
 
@@ -43,10 +43,10 @@ actor QLearner {
     private let trainInterval = 960
     private let epsilonMin: Double = 0.04
     private let epsilonDecay: Double = 0.995
-    private let targetUpdateInterval: Int = 200
     private let surpriseRatio: Double = 0.25
     private let surpriseThreshold: Double = 2.0
     private let deathPenalty: Double = -80
+    private(set) var tau: Double = 0.005
     private let diagnosticsMinSteps: Int = 10
     private let diagnosticsStreakThreshold: Int = 3
 
@@ -80,9 +80,10 @@ actor QLearner {
 
     var currentEpsilon: Double { epsilonGreedy }
 
-    func setCostFunction(_ type: CostFunctionType) {
-        costFunction = type.make()
-    }
+    func setCostFunction(_ type: CostFunctionType) { costFunction = type.make() }
+    func setGamma(_ value: Double) { gamma = min(0.999, max(0.01, value)) }
+    func setTau(_ value: Double) { tau = min(0.1, max(0.001, value)) }
+    func setDeltaWeight(_ value: Double) { deltaWeight = min(1.0, max(0.0, value)) }
     
     func reportExperience(currentState: SensorInput, nextState: SensorInput?, actionIndex: Int, didDie: Bool) {
         let reward = calculateReward(currentState: currentState, nextState: nextState)
@@ -196,9 +197,9 @@ actor QLearner {
 		
 		learningStepsCount += 1
 		epsilonGreedy = max(epsilonMin, epsilonGreedy * epsilonDecay)
-        if learningStepsCount % targetUpdateInterval == 0 {
-			targetNetwork = mainNetwork
-		}
+        // Soft update: target slowly tracks main (τ=0.005 ≈ 0.5% per step).
+        // Keeps training stable — no sudden weight jumps unlike hard copy every N steps.
+        targetNetwork.polyakBlend(toward: mainNetwork, tau: tau)
 
         let avgReward = batch.map { $0.reward }.reduce(0, +) / Double(batch.count)
         let avgMaxQ = maxQSum / Double(batch.count)

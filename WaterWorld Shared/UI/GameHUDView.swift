@@ -64,25 +64,33 @@ struct GameHUDView: View {
     // MARK: - Center
 
     private var centerPanel: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 24) {
-                hudText(String(format: "Light: %.1f", hud.lightLevel))
-                hudText(formattedTime)
+        HStack(alignment: .top, spacing: 16) {
+            VStack(spacing: 8) {
+                HStack(spacing: 24) {
+                    hudText(String(format: "Light: %.1f", hud.lightLevel)).monospacedDigit()
+                    hudText(formattedTime).monospacedDigit()
+                }
+                DayNightTimelineView(dayProgress: hud.dayProgress)
+                    .frame(width: 80, height: 80)
+                    .animation(.linear(duration: HUD.tickDuration / hud.simulationSpeed), value: hud.dayProgress)
+                SegmentedButtons(
+                    options: ["Normal", "Learning"],
+                    selectedIndex: hud.simulationMode == .normal ? 0 : 1,
+                    onSelect: { _ in hud.onToggleMode() }
+                ).frame(width: 160)
+                SegmentedButtons(
+                    options: CostFunctionType.allCases.map(\.rawValue),
+                    selectedIndex: CostFunctionType.allCases.firstIndex(of: hud.costFunctionType) ?? 0,
+                    onSelect: { hud.onSelectCostFunction(CostFunctionType.allCases[$0]) }
+                ).frame(width: 160)
             }
-            DayNightTimelineView(dayProgress: hud.dayProgress)
-                .frame(width: 80, height: 80)
-                .animation(.linear(duration: HUD.tickDuration / hud.simulationSpeed), value: hud.dayProgress)
-            SegmentedButtons(
-                options: ["Normal", "Learning"],
-                selectedIndex: hud.simulationMode == .normal ? 0 : 1,
-                onSelect: { _ in hud.onToggleMode() }
-            ).frame(width: 160)
-            SegmentedButtons(
-                options: CostFunctionType.allCases.map(\.rawValue),
-                selectedIndex: CostFunctionType.allCases.firstIndex(of: hud.costFunctionType) ?? 0,
-                onSelect: { hud.onSelectCostFunction(CostFunctionType.allCases[$0]) }
-            ).frame(width: 160)
+
+            if hud.simulationMode == .learning {
+                LearningParamsView(hud: hud)
+                    .transition(.opacity)
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: hud.simulationMode)
     }
 
     private var formattedTime: String {
@@ -181,7 +189,7 @@ private struct SegmentedButtons: View {
 
 // MARK: - HUD Button Style
 
-private struct HUDButtonStyle: ButtonStyle {
+struct HUDButtonStyle: ButtonStyle {
     private let bg = Color(white: 0.78)
     private let borderColor = Color(white: 0.6)
     private let pressedBg = Color(white: 0.65)

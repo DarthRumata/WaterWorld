@@ -22,6 +22,11 @@ final class GameHUDModel {
     var predatorsIntensity: PredatorsIntensity = .medium
     var costFunctionType: CostFunctionType = .mse
 
+    // MARK: - Learning params
+    var gamma: Double = 0.99
+    var tau: Double = 0.005
+    var deltaWeight: Double = 0.05
+
     // MARK: - Actions
     var onRestart: () -> Void = {}
     var onIncreaseSpeed: () -> Void = {}
@@ -31,6 +36,9 @@ final class GameHUDModel {
     var onToggleMode: () -> Void = {}
     var onSelectPredatorsIntensity: (PredatorsIntensity) -> Void = { _ in }
     var onSelectCostFunction: (CostFunctionType) -> Void = { _ in }
+    var onSetGamma: (Double) -> Void = { _ in }
+    var onSetTau: (Double) -> Void = { _ in }
+    var onSetDeltaWeight: (Double) -> Void = { _ in }
     var onTapMetric: (MetricTab) -> Void = { _ in }
     var onSaveNetwork: () -> Void = {}
     var onLoadNetwork: () -> Void = {}

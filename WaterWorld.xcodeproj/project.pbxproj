@@ -47,6 +47,7 @@
 				UI/CustomPopoverNode.swift,
 				UI/GameHUDModel.swift,
 				UI/GameHUDView.swift,
+				UI/LearningParamsView.swift,
 				UI/LearningWarningBanner.swift,
 				UI/MainView.swift,
 				UI/MetricsChartView.swift,

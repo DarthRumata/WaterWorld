@@ -172,17 +172,12 @@ class GameScene: SKScene {
         addPopoverNode()
         
         $dayProgress
-            .map { progress -> SKColor in
-                return DayNightStyler.skyColor(for: progress)
-            }
-            .assign(to: \.backgroundColor, on: self)
-            .store(in: &cancellables)
-
-        $dayProgress
             .sink { [weak self] progress in
                 guard let self else { return }
-                self.container.color = DayNightStyler.waterColor(for: progress)
                 self.hudModel.dayProgress = progress
+                guard self.simulationMode != .learning else { return }
+                self.backgroundColor = DayNightStyler.skyColor(for: progress)
+                self.container.color = DayNightStyler.waterColor(for: progress)
             }
             .store(in: &cancellables)
 
@@ -227,6 +222,21 @@ class GameScene: SKScene {
         hudModel.onToggleMode = { [weak self] in self?.toggleSimulationMode() }
         hudModel.onSelectPredatorsIntensity = { [weak self] intensity in self?.setPredatorsIntensity(intensity) }
         hudModel.onSelectCostFunction = { [weak self] type in self?.setCostFunctionType(type) }
+        hudModel.onSetGamma = { [weak self] value in
+            guard let self else { return }
+            Task { await self.qLearner.setGamma(value) }
+            self.hudModel.gamma = value
+        }
+        hudModel.onSetTau = { [weak self] value in
+            guard let self else { return }
+            Task { await self.qLearner.setTau(value) }
+            self.hudModel.tau = value
+        }
+        hudModel.onSetDeltaWeight = { [weak self] value in
+            guard let self else { return }
+            Task { await self.qLearner.setDeltaWeight(value) }
+            self.hudModel.deltaWeight = value
+        }
         hudModel.onTapMetric = { [weak self] tab in self?.presentMetricsChart(tab: tab) }
         hudModel.onSaveNetwork = { [weak self] in
             guard let self else { return }

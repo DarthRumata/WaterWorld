@@ -24,8 +24,15 @@ struct Neuron: Sendable {
         return zip(weights, inputs).map(*).reduce(0, +) + bias
     }
     
+    mutating func polyakBlend(toward main: Neuron, tau: Double) {
+        for i in weights.indices {
+            weights[i] = tau * main.weights[i] + (1 - tau) * weights[i]
+        }
+        bias = tau * main.bias + (1 - tau) * bias
+    }
+
     mutating func updateWeights(learningRate: Double, delta: Double, inputs: [Double]) {
-        for (i, weight) in weights.enumerated() {
+        for i in weights.indices {
             weights[i] -= learningRate * delta * inputs[i]
         }
         
