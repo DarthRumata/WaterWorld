@@ -27,22 +27,28 @@ actor QLearner {
     var mainNetwork = QLearner.makeNetwork()
     private var targetNetwork = QLearner.makeNetwork()
     
-    private var networkUpdateHandler: (@Sendable (NeuralNetwork, Double) async -> Void)?
+    private let networkUpdateHandler: (@Sendable (NeuralNetwork, Double) async -> Void)?
+    private let sustainedWarningHandler: (@Sendable ([LearningWarning]) async -> Void)?
 
     private let batchSize: Int
 	private var epsilonGreedy: Double
 	private let gamma: Double
 	private let learningRate: Double
-	
-    private let maxBufferSize: Int = 350000
+    private let deltaWeight: Double
+    private var costFunction: any CostFunction
+    private let energyCalculator = EnergyCalculator()
+
+    private let maxBufferSize: Int = 550000
     private let maxSurpriseBufferSize: Int = 50000
     private let trainInterval = 960
     private let epsilonMin: Double = 0.04
     private let epsilonDecay: Double = 0.995
-    private let targetUpdateInterval: Int = 10
+    private let targetUpdateInterval: Int = 200
     private let surpriseRatio: Double = 0.25
     private let surpriseThreshold: Double = 2.0
-    private let deathPenalty: Double = -120
+    private let deathPenalty: Double = -80
+    private let diagnosticsMinSteps: Int = 10
+    private let diagnosticsStreakThreshold: Int = 3
 
     private var normalBuffer: [QLearningExperience] = []
     private var normalBufferIndex: Int = 0
@@ -50,23 +56,36 @@ actor QLearner {
     private var surpriseBufferIndex: Int = 0
     private var stepsSinceLastTrain = 0
     private var learningStepsCount = 0
+    private var warningStreaks: [String: Int] = [:]
 
-    
-    init(epsilonGreedy: Double, gamma: Double, batchSize: Int = 64, learningRate: Double = 0.01) {
+    init(
+        epsilonGreedy: Double,
+        gamma: Double,
+        batchSize: Int,
+        learningRate: Double,
+        deltaWeight: Double,
+        costFunction: any CostFunction,
+        networkUpdateHandler: (@Sendable (NeuralNetwork, Double) async -> Void)?,
+        sustainedWarningHandler: (@Sendable ([LearningWarning]) async -> Void)?
+    ) {
         self.epsilonGreedy = epsilonGreedy
         self.gamma = gamma
         self.batchSize = batchSize
         self.learningRate = learningRate
+        self.deltaWeight = deltaWeight
+        self.costFunction = costFunction
+        self.networkUpdateHandler = networkUpdateHandler
+        self.sustainedWarningHandler = sustainedWarningHandler
     }
 
     var currentEpsilon: Double { epsilonGreedy }
 
-    func setNetworkUpdateHandler(_ handler: @escaping @Sendable (NeuralNetwork, Double) async -> Void) {
-        networkUpdateHandler = handler
+    func setCostFunction(_ type: CostFunctionType) {
+        costFunction = type.make()
     }
     
     func reportExperience(currentState: SensorInput, nextState: SensorInput?, actionIndex: Int, didDie: Bool) {
-        let reward = calculateReward(nextState: nextState)
+        let reward = calculateReward(currentState: currentState, nextState: nextState)
         let step = QLearningExperience(
             state: currentState,
             actionIndex: actionIndex,
@@ -134,17 +153,6 @@ actor QLearner {
         return targets
     }
 
-    /// Mean Squared Error between predictions and targets
-    private func meanSquaredError(predictions: [Double], targets: [Double]) -> Double {
-        guard !predictions.isEmpty, predictions.count == targets.count else { return 0 }
-        var sumSquaredError: Double = 0
-        for (p, t) in zip(predictions, targets) {
-            let d = t - p
-            sumSquaredError += d * d
-        }
-        return sumSquaredError / Double(predictions.count)
-    }
-
     private func learn(from batch: [QLearningExperience]) async {
         guard !batch.isEmpty else { return }
 
@@ -161,8 +169,8 @@ actor QLearner {
         // Compute DQN targets with target network
         let targets = computeTargets(for: batch)
 
-        // Compute MSE loss for monitoring/training step
-        let mseLoss = meanSquaredError(predictions: predictedQsForTakenActions, targets: targets)
+        // Compute loss for monitoring/training step
+        let mseLoss = costFunction.loss(predictions: predictedQsForTakenActions, targets: targets)
 
         // Yield so other actor requests (e.g. neuralNetwork reads) can be served between phases
         await Task.yield()
@@ -170,9 +178,10 @@ actor QLearner {
         for (step, target) in zip(batch, targets) {
             let inputs = step.state.normalized
             let predicted = mainNetwork.predict(inputs: inputs)
-            let tdError = abs(predicted[step.actionIndex] - target)
+            let grad = costFunction.gradient(prediction: predicted[step.actionIndex], target: target)
+            let tdError = abs(grad)
             var error = Array(repeating: 0.0, count: predicted.count)
-            error[step.actionIndex] = predicted[step.actionIndex] - target
+            error[step.actionIndex] = grad
             mainNetwork.backward(error: error, inputs: inputs, learningRate: learningRate)
 
             if tdError > surpriseThreshold {
@@ -199,10 +208,18 @@ actor QLearner {
         let handler = networkUpdateHandler
         Task { await handler?(net, eps) }
 
+        let sustainedWarnings = diagnoseLearningHealth(batch: batch)
+        let warningHandler = sustainedWarningHandler
+
         Task { @MainActor in
             QLearningStore.shared.appendLoss(mseLoss, epsilon: eps)
             QLearningStore.shared.appendRewardTrend(avgReward)
             QLearningStore.shared.appendMaxQTrend(avgMaxQ)
+            QLearningStore.shared.updateLearningWarnings(sustainedWarnings)
+        }
+
+        if !sustainedWarnings.isEmpty {
+            Task { await warningHandler?(sustainedWarnings) }
         }
     }
     
@@ -214,10 +231,39 @@ actor QLearner {
         targetNetwork = network
     }
 	
-	private func calculateReward(nextState: SensorInput?) -> Double {
+    private func diagnoseLearningHealth(batch: [QLearningExperience]) -> [LearningWarning] {
+        guard learningStepsCount >= diagnosticsMinSteps else { return [] }
+
+        let sampleInputs = batch.prefix(16).map { $0.state.normalized }
+        let detected = mainNetwork.healthCheck(sampleInputs: Array(sampleInputs))
+
+        // Increment streak for detected warnings, reset for cleared ones
+        var updatedStreaks: [String: Int] = [:]
+        for warning in detected {
+            updatedStreaks[warning.description] = (warningStreaks[warning.description] ?? 0) + 1
+        }
+        warningStreaks = updatedStreaks
+
+        return detected.filter { (warningStreaks[$0.description] ?? 0) >= diagnosticsStreakThreshold }
+    }
+
+    private func calculateReward(currentState: SensorInput, nextState: SensorInput?) -> Double {
         guard let nextState else { return deathPenalty }
-        return (nextState.energy / GlobalConstants.maxEnergy) * 2.0 - 1.0
-	}
+
+        // Absolute wellbeing: how full is the organism right now? ∈ [0, 1]
+        let absolute = nextState.energy / GlobalConstants.maxEnergy
+
+        // Normalized sensation: how much did energy change this tick?
+        // Asymmetric bounds: gain is harder to achieve than loss, so each direction
+        // is normalized independently to keep the full [-1, 1] range meaningful.
+        let delta = nextState.energy - currentState.energy
+        let normalizedDelta = delta >= 0
+            ? min(delta / energyCalculator.maxGainPerTick, 1.0)   // ∈ [0,  1]
+            : max(delta / energyCalculator.maxLossPerTick, -1.0)  // ∈ [-1, 0]
+
+        // Alpha blend: deltaWeight=0 → pure survival signal, deltaWeight=1 → pure sensation
+        return (1.0 - deltaWeight) * absolute + deltaWeight * normalizedDelta
+    }
 }
 
 private func zip3<A, B, C>(_ a: [A], _ b: [B], _ c: [C]) -> [(A, B, C)] {

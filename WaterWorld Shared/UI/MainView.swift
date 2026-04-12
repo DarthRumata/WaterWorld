@@ -38,5 +38,8 @@ struct MainView: View {
                 }
             }
         }
+        .overlay(alignment: .top) {
+            LearningWarningBanner()
+        }
     }
 }

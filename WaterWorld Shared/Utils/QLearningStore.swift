@@ -25,10 +25,13 @@ final class QLearningStore {
     private(set) var dailyPredatorDeaths: [Int] = []
     private var currentDayHungerDeaths: Int = 0
     private var currentDayPredatorDeaths: Int = 0
+    /// Day index at which each episode started, keyed by episode number.
+    private(set) var episodeBoundaries: [Int: Int] = [:]
 
     // Real-time metrics for UI
     private(set) var lastAvgReward: Double = 0
     private(set) var lastAvgMaxQ: Double = 0
+    private(set) var learningWarnings: [LearningWarning] = []
 
     func append(_ step: QLearningExperience) {
         steps.append(step)
@@ -46,9 +49,17 @@ final class QLearningStore {
         lastAvgReward = avgReward
     }
 
+    func updateLearningWarnings(_ warnings: [LearningWarning]) {
+        learningWarnings = warnings
+    }
+
     func appendMaxQTrend(_ avgMaxQ: Double) {
         batchMaxQs.append(avgMaxQ)
         lastAvgMaxQ = avgMaxQ
+    }
+
+    func recordEpisodeBoundary(episode: Int) {
+        episodeBoundaries[episode] = dailyHungerDeaths.count
     }
 
     func recordDeath(cause: CauseOfDeath) {
@@ -77,5 +88,6 @@ final class QLearningStore {
         dailyPredatorDeaths.removeAll()
         currentDayHungerDeaths = 0
         currentDayPredatorDeaths = 0
+        episodeBoundaries.removeAll()
     }
 }

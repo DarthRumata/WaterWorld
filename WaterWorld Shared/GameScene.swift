@@ -34,6 +34,7 @@ class GameScene: SKScene {
     
     @Published private var simulationMode: SimulationMode = .normal
     @Published private var predatorsIntensity: PredatorsIntensity = .medium
+    @Published private var costFunctionType: CostFunctionType = .mse
     
     // UI
     let hudModel = GameHUDModel()
@@ -64,6 +65,7 @@ class GameScene: SKScene {
     
     private var notificationTask: Task<Void, Error>?
     
+    private var isTickRunning = false
     private var isResettingEpisode = false
     private var episodeNumber: Int = 0
     private var episodeStartDay: Int = 0
@@ -94,15 +96,17 @@ class GameScene: SKScene {
         self.qLearner = QLearner(
             epsilonGreedy: 1.0,
             gamma: 0.99,
-            batchSize: 128
-        )
-
-        Task { [weak self] in
-            guard let self else { return }
-            await self.qLearner.setNetworkUpdateHandler { [weak self] network, epsilon in
+            batchSize: 128,
+            learningRate: 0.01,
+            deltaWeight: 0.05,
+            costFunction: costFunctionType.make(),
+            networkUpdateHandler: { [weak self] network, epsilon in
                 await self?.propagateNetwork(network, epsilon: epsilon)
+            },
+            sustainedWarningHandler: { [weak self] _ in
+                await self?.pauseSimulation()
             }
-        }
+        )
     }
 
     @MainActor
@@ -116,23 +120,25 @@ class GameScene: SKScene {
     }
     
     override func update(_ currentTime: TimeInterval) {
-        // Calculate delta time
-        let deltaTime = currentTime - (lastUpdateTime ?? currentTime)
+        let rawDelta = currentTime - (lastUpdateTime ?? currentTime)
         lastUpdateTime = currentTime
         clampOrganismPositions()
-        
-        guard gameState == .active else {
-            return
-        }
-        
+
+        guard gameState == .active else { return }
+
+        // If the previous tick is still processing — don't accumulate time.
+        // The simulation naturally throttles to what the system can actually handle.
+        guard !isTickRunning else { return }
+
+        // Clamp delta to prevent a large spike after a pause or debugger break.
+        let deltaTime = min(rawDelta, 0.1)
         let scaledDeltaTime = deltaTime * simulationSpeed
         timeSinceLastTick += scaledDeltaTime
-        // Update total time considering simulation speed
         totalTime += scaledDeltaTime
-        
+
         if timeSinceLastTick >= GlobalConstants.gameTickDuration {
+            timeSinceLastTick = 0
             gameTick()
-            timeSinceLastTick -= GlobalConstants.gameTickDuration
         }
     }
     
@@ -191,6 +197,7 @@ class GameScene: SKScene {
         $gameState.sink { [weak self] in self?.hudModel.gameState = $0 }.store(in: &cancellables)
         $simulationMode.sink { [weak self] in self?.hudModel.simulationMode = $0 }.store(in: &cancellables)
         $predatorsIntensity.sink { [weak self] in self?.hudModel.predatorsIntensity = $0 }.store(in: &cancellables)
+        $costFunctionType.sink { [weak self] in self?.hudModel.costFunctionType = $0 }.store(in: &cancellables)
         $organisms.sink { [weak self] in self?.hudModel.organismsCount = $0.count }.store(in: &cancellables)
     }
     
@@ -219,6 +226,7 @@ class GameScene: SKScene {
         hudModel.onReport = { [weak self] in self?.presentQLearningReport() }
         hudModel.onToggleMode = { [weak self] in self?.toggleSimulationMode() }
         hudModel.onSelectPredatorsIntensity = { [weak self] intensity in self?.setPredatorsIntensity(intensity) }
+        hudModel.onSelectCostFunction = { [weak self] type in self?.setCostFunctionType(type) }
         hudModel.onTapMetric = { [weak self] tab in self?.presentMetricsChart(tab: tab) }
         hudModel.onSaveNetwork = { [weak self] in
             guard let self else { return }
@@ -373,6 +381,11 @@ class GameScene: SKScene {
         }
     }
     
+    private func setCostFunctionType(_ type: CostFunctionType) {
+        costFunctionType = type
+        Task { await qLearner.setCostFunction(type) }
+    }
+
     private func setPredatorsIntensity(_ intensity: PredatorsIntensity) {
         predatorsIntensity = intensity
         predationManager.updateIntensity(intensity)
@@ -385,16 +398,12 @@ class GameScene: SKScene {
     // MARK: State updates
     
     private func gameTick() {
-        // Calculate the current time in the day cycle
         let timeInDay = totalTime.truncatingRemainder(dividingBy: GlobalConstants.dayDuration)
-        
-        // Update light level (0 to 10 and back to 0)
         dayProgress = CGFloat(timeInDay / GlobalConstants.dayDuration)
         lightLevel = environment.baseLightLevel(maxLight: GlobalConstants.maxLightLevel, dayProgress: dayProgress)
-        
-        // Track night progression for predation schedule
+
         predationManager.advanceDayProgress(dayProgress: dayProgress, tickDuration: GlobalConstants.gameTickDuration)
-        
+
         speed = simulationSpeed
         physicsWorld.speed = simulationSpeed
         let newDayCount = Int(totalTime) / Int(GlobalConstants.dayDuration)
@@ -402,18 +411,14 @@ class GameScene: SKScene {
             QLearningStore.shared.advanceDay(to: newDayCount)
         }
         dayCount = newDayCount
-        
-        // Plan attacks at the beginning of night
+
         predationManager.ensurePlanIfNight(dayProgress: dayProgress)
-        
-        
-        // Replaced predation + notification calls with a combined single tick pass on the main actor
-        // Run a single combined tick pass (predation + notifications) on the main actor
-        notificationTask?.cancel()
+
+        isTickRunning = true
         notificationTask = Task { [weak self] in
-            try Task.checkCancellation()
             guard let self else { return }
             await self.runTickPass()
+            await MainActor.run { self.isTickRunning = false }
         }
     }
     
@@ -422,6 +427,7 @@ class GameScene: SKScene {
         isResettingEpisode = true
         episodeNumber += 1
         episodeStartDay = dayCount
+        QLearningStore.shared.recordEpisodeBoundary(episode: episodeNumber)
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.finishCurrentLearningEpisode()
@@ -478,7 +484,8 @@ class GameScene: SKScene {
     private func cancelCurrentUpdate() {
         notificationTask?.cancel()
         notificationTask = nil
-        print("Update canceld")
+        isTickRunning = false
+        timeSinceLastTick = 0
     }
     
     // MARK: Update overlay

@@ -72,7 +72,16 @@ struct GameHUDView: View {
             DayNightTimelineView(dayProgress: hud.dayProgress)
                 .frame(width: 80, height: 80)
                 .animation(.linear(duration: HUD.tickDuration / hud.simulationSpeed), value: hud.dayProgress)
-            Spacer()
+            SegmentedButtons(
+                options: ["Normal", "Learning"],
+                selectedIndex: hud.simulationMode == .normal ? 0 : 1,
+                onSelect: { _ in hud.onToggleMode() }
+            ).frame(width: 160)
+            SegmentedButtons(
+                options: CostFunctionType.allCases.map(\.rawValue),
+                selectedIndex: CostFunctionType.allCases.firstIndex(of: hud.costFunctionType) ?? 0,
+                onSelect: { hud.onSelectCostFunction(CostFunctionType.allCases[$0]) }
+            ).frame(width: 160)
         }
     }
 
@@ -87,19 +96,16 @@ struct GameHUDView: View {
 
     private var rightPanel: some View {
         VStack(alignment: .trailing, spacing: HUD.spacing) {
-            hudButton("Restart", action: hud.onRestart)
-            pauseButton
-            hudButton("Report", action: hud.onReport)
+            HStack(spacing: 12) {
+                hudButton("Restart", action: hud.onRestart)
+                pauseButton
+                hudButton("Report", action: hud.onReport)
+            }
             Divider()
             HStack(spacing: 8) {
                 hudButton("Save NN", action: hud.onSaveNetwork)
                 hudButton("Load NN", action: hud.onLoadNetwork)
             }
-            SegmentedButtons(
-                options: ["Normal", "Learning"],
-                selectedIndex: hud.simulationMode == .normal ? 0 : 1,
-                onSelect: { _ in hud.onToggleMode() }
-            ).frame(width: 160)
             SegmentedButtons(
                 options: ["Off", "Low", "Med", "High"],
                 selectedIndex: PredatorsIntensity.allCases.firstIndex(of: hud.predatorsIntensity) ?? 0,
@@ -135,7 +141,7 @@ struct GameHUDView: View {
     }
 
     private func hudButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(title, action: action).fixedSize().buttonStyle(.plain)
+        Button(title, action: action).buttonStyle(HUDButtonStyle())
     }
 }
 
@@ -170,6 +176,27 @@ private struct SegmentedButtons: View {
         .background(containerBg)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(borderColor, lineWidth: 1))
+    }
+}
+
+// MARK: - HUD Button Style
+
+private struct HUDButtonStyle: ButtonStyle {
+    private let bg = Color(white: 0.78)
+    private let borderColor = Color(white: 0.6)
+    private let pressedBg = Color(white: 0.65)
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: HUD.secondaryFont))
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(configuration.isPressed ? pressedBg : bg)
+            .foregroundStyle(HUD.textColor)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(borderColor, lineWidth: 1))
     }
 }
 
@@ -211,7 +238,7 @@ private struct DayNightTimelineView: View {
                     path.move(to: CGPoint(x: cx - radius, y: cy))
                     path.addLine(to: CGPoint(x: cx + radius, y: cy))
                 }
-                .stroke(Color.secondary.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                .stroke(Color(white: 0.3).opacity(0.8), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
 
                 // Sun or moon
                 Circle()

@@ -7,7 +7,7 @@ import SwiftUI
 import Charts
 
 enum MetricTab: String, CaseIterable {
-    case loss = "Loss (MSE)"
+    case loss = "Loss"
     case reward = "Avg Reward"
     case maxQ = "Avg Max Q"
     case mortality = "Mortality"
@@ -53,7 +53,11 @@ struct MetricsChartView: View {
                 xLabel: "Training step", companion: (store.batchEpsilons, "ε", .purple)
             )
         case .mortality:
-            MortalityChart(hunger: store.dailyHungerDeaths, predation: store.dailyPredatorDeaths)
+            MortalityChart(
+                hunger: store.dailyHungerDeaths,
+                predation: store.dailyPredatorDeaths,
+                episodeBoundaries: store.episodeBoundaries
+            )
         }
     }
 }
@@ -61,6 +65,7 @@ struct MetricsChartView: View {
 private struct MortalityChart: View {
     let hunger: [Int]
     let predation: [Int]
+    let episodeBoundaries: [Int: Int]
 
     private struct Bar: Identifiable {
         let id: String
@@ -80,12 +85,24 @@ private struct MortalityChart: View {
         if hunger.isEmpty {
             VStack { Spacer(); ContentUnavailableView("No data yet", systemImage: "chart.bar.fill"); Spacer() }
         } else {
-            Chart(bars) { bar in
-                BarMark(
-                    x: .value("Day", bar.day),
-                    y: .value("Deaths", bar.count)
-                )
-                .foregroundStyle(by: .value("Cause", bar.cause))
+            Chart {
+                ForEach(bars) { bar in
+                    BarMark(
+                        x: .value("Day", bar.day),
+                        y: .value("Deaths", bar.count)
+                    )
+                    .foregroundStyle(by: .value("Cause", bar.cause))
+                }
+                ForEach(episodeBoundaries.sorted(by: { $0.key < $1.key }), id: \.key) { episode, day in
+                    RuleMark(x: .value("Day", day))
+                        .foregroundStyle(.gray.opacity(0.5))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                        .annotation(position: .top, alignment: .leading) {
+                            Text("Ep \(episode)")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                        }
+                }
             }
             .chartXAxisLabel("Day")
             .chartYAxisLabel("Deaths")

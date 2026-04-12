@@ -7,6 +7,24 @@
 
 import Foundation
 
+// MARK: - Learning Health
+
+enum LearningWarning: Sendable, Equatable {
+    case dyingReLU(layerIndex: Int, deadRatio: Double)
+    case explodingWeights(layerIndex: Int, meanAbsWeight: Double)
+
+    var description: String {
+        switch self {
+        case let .dyingReLU(layer, ratio):
+            return "ReLU L\(layer + 1): \(Int(ratio * 100))% dead"
+        case let .explodingWeights(layer, mean):
+            return "Weights L\(layer + 1): \(String(format: "%.1f", mean))"
+        }
+    }
+}
+
+// MARK: -
+
 enum Activation: Sendable {
     case sigmoid
     case relu
@@ -90,6 +108,37 @@ struct NeuralNetwork: Sendable {
         }
     }
     
+    /// Runs diagnostics on hidden layers using provided sample inputs.
+    /// - Dying ReLU: > 70% of neurons output 0 across all samples.
+    /// - Exploding weights: mean |weight| > 10.
+    func healthCheck(sampleInputs: [[Double]]) -> [LearningWarning] {
+        guard !sampleInputs.isEmpty, layers.count > 1 else { return [] }
+        var warnings: [LearningWarning] = []
+        let hiddenLayers = layers.dropLast()
+
+        for (layerIndex, layer) in hiddenLayers.enumerated() {
+            // Exploding weights check
+            let allWeights = layer.neurons.flatMap(\.weights)
+            let meanAbsWeight = allWeights.reduce(0.0) { $0 + abs($1) } / Double(max(allWeights.count, 1))
+            if meanAbsWeight > 10.0 {
+                warnings.append(.explodingWeights(layerIndex: layerIndex, meanAbsWeight: meanAbsWeight))
+            }
+
+            // Dying ReLU check
+            guard case .relu = layer.activation else { continue }
+            var deadCount = 0
+            for input in sampleInputs {
+                let layerInput = layers[0..<layerIndex].reduce(input) { current, l in l.computeOutputs(inputs: current) }
+                deadCount += layer.computeOutputs(inputs: layerInput).filter { $0 == 0 }.count
+            }
+            let deadRatio = Double(deadCount) / Double(layer.neurons.count * sampleInputs.count)
+            if deadRatio > 0.7 {
+                warnings.append(.dyingReLU(layerIndex: layerIndex, deadRatio: deadRatio))
+            }
+        }
+        return warnings
+    }
+
     mutating func backward(error: [Double], inputs: [Double], learningRate: Double) {
         // Forward pass: cache inputs and pre-activation z values per layer
         struct LayerCache {

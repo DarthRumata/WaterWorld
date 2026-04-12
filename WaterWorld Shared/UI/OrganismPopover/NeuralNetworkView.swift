@@ -82,7 +82,9 @@ struct NeuralNetworkView: View {
                             HStack(spacing: 10) {
                                 ForEach(["Up", "Down", "Wait"], id: \.self) { label in
                                     Text(label)
-                                        .frame(width: 30)
+                                        .font(.system(size: 11))
+                                        .lineLimit(1)
+                                        .frame(width: 40)
                                         .multilineTextAlignment(.center)
                                         .foregroundColor(.white)
                                 }
@@ -144,38 +146,33 @@ struct NeuralNetworkView: View {
     private func createNeuronViewModels(for layer: NeuralLayer, outputs: [Double], activation: Activation, isOutputLayer: Bool) -> [NeuronViewModel] {
         let maxOutputIndex = outputs.indices.max(by: { outputs[$0] < outputs[$1] })
         let hiddenSoftmaxThreshold = 1.0 / Double(max(outputs.count, 1))
+        // Normalize ReLU intensity relative to the layer's own max — so the most
+        // active neuron is always full brightness and others are shown relatively.
+        let reluLayerMax = activation == .relu ? (outputs.max() ?? 0.0) : 0.0
+
         return zip(layer.neurons, outputs).enumerated().map { index, neuronAndOutput in
             let (neuron, output) = neuronAndOutput
 
-            // Determine isActive depending on layer role and activation
             let isActive: Bool
             if isOutputLayer {
-                // Highlight the argmax for outputs (works well for softmax too)
                 isActive = index == maxOutputIndex
             } else {
                 switch activation {
-                case .relu:
-                    isActive = output > 0.0
-                case .sigmoid:
-                    isActive = output > 0.5
-                case .softmax:
-                    isActive = output > hiddenSoftmaxThreshold
-                case .linear:
-                    isActive = output > 0.0
+                case .relu:    isActive = output > 0.0
+                case .sigmoid: isActive = output > 0.5
+                case .softmax: isActive = output > hiddenSoftmaxThreshold
+                case .linear:  isActive = output > 0.0
                 }
             }
 
-            // Compute an intensity in 0...1 for visualization
             let intensity: Double
             switch activation {
-            case .sigmoid:
-                intensity = max(0.0, min(1.0, output))
             case .relu:
-                intensity = max(0.0, min(1.0, output))
-            case .softmax:
+                intensity = reluLayerMax > 0 ? output / reluLayerMax : 0.0
+            case .sigmoid, .softmax:
                 intensity = max(0.0, min(1.0, output))
             case .linear:
-                intensity = max(0.0, min(1.0, output))
+                intensity = 0.0  // output layer uses isActive for color, not intensity
             }
 
             return NeuronViewModel(
@@ -183,7 +180,8 @@ struct NeuralNetworkView: View {
                 bias: neuron.bias,
                 output: output,
                 isActive: isActive,
-                intensity: intensity
+                intensity: intensity,
+                isOutputNeuron: isOutputLayer
             )
         }
     }

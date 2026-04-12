@@ -20,6 +20,7 @@ final class GameHUDModel {
     var gameState: GameState = .stopped
     var simulationMode: SimulationMode = .normal
     var predatorsIntensity: PredatorsIntensity = .medium
+    var costFunctionType: CostFunctionType = .mse
 
     // MARK: - Actions
     var onRestart: () -> Void = {}
@@ -29,6 +30,7 @@ final class GameHUDModel {
     var onReport: () -> Void = {}
     var onToggleMode: () -> Void = {}
     var onSelectPredatorsIntensity: (PredatorsIntensity) -> Void = { _ in }
+    var onSelectCostFunction: (CostFunctionType) -> Void = { _ in }
     var onTapMetric: (MetricTab) -> Void = { _ in }
     var onSaveNetwork: () -> Void = {}
     var onLoadNetwork: () -> Void = {}

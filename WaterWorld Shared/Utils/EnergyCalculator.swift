@@ -8,6 +8,14 @@
 import Foundation
 
 class EnergyCalculator {
+    /// Maximum net energy change per tick: best possible light minus idle cost.
+    var maxGainPerTick: Double {
+        energyGain(fromLightLevel: GlobalConstants.maxLightLevel) - GlobalConstants.idleEnergyLoss
+    }
+
+    /// Maximum net energy loss per tick: movement cost in total darkness.
+    var maxLossPerTick: Double { GlobalConstants.movementEnergyLoss }
+
     func energyGain(fromLightLevel lightLevel: Double) -> Double {
         switch lightLevel {
         case 7 ... 10:
