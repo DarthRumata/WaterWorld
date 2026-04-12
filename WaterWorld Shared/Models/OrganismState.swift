@@ -1,17 +1,11 @@
-//
-//  SensorInput.swift
-//  WaterWorld macOS
-//
-//  Created by Stas Kirichok on 12/7/24.
-//
-
 import Foundation
 
-struct SensorInput: Equatable, Sendable {
+struct OrganismState: Equatable, Sendable {
     let lightLevel: Double
     let depth: Double
     let dayProgress: Double
     let energy: Double
+    let wasAttacked: Bool
 
     var normalized: [Double] {
         [
@@ -19,6 +13,7 @@ struct SensorInput: Equatable, Sendable {
             depth / GlobalConstants.maxDepth,
             energy / GlobalConstants.maxEnergy,
             dayProgress
+            // wasAttacked intentionally excluded — reward signal only, not a network input
         ]
     }
 }

@@ -294,8 +294,8 @@ class GameScene: SKScene {
 
             let model = OrganismModel(
                 brain: QBrain(
-                    reportExperience: { [weak self] state, next, action, died in
-                        await self?.qLearner.reportExperience(currentState: state, nextState: next, actionIndex: action, didDie: died)
+                    reportExperience: { [weak self] state, next, action in
+                        await self?.qLearner.reportExperience(currentState: state, nextState: next, actionIndex: action)
                     },
                     agentPolicy: AgentPolicy(network: network, epsilon: epsilon)
                 ),
@@ -440,15 +440,8 @@ class GameScene: SKScene {
         QLearningStore.shared.recordEpisodeBoundary(episode: episodeNumber)
         Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.finishCurrentLearningEpisode()
             await self.resetPopulationForLearningCycle()
             self.isResettingEpisode = false
-        }
-    }
-
-    private func finishCurrentLearningEpisode() async {
-        for model in organismModels.values {
-            await model.finishEpisodeSurvived()
         }
     }
     
@@ -481,13 +474,7 @@ class GameScene: SKScene {
 
             view.speed = simulationSpeed
             let lightLevel = lightLevel(atDepth: depth)
-            let input = await SensorInput(
-                lightLevel: lightLevel,
-                depth: depth,
-                dayProgress: dayProgress,
-                energy: model.energy
-            )
-            await model.handleChanges(input)
+            await model.handleChanges(lightLevel: lightLevel, depth: depth, dayProgress: dayProgress)
         }
     }
     

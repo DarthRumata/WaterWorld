@@ -16,18 +16,22 @@ actor PredationSystem {
     }
 
     func planNightAttacks() -> [TimeInterval] {
-        // Flat rate: kills per night derived from killBudgetFactor (not population-based)
         let raw = Int(config.killBudgetFactor)
         let budget = max(0, min(raw, config.maxKillsPerNight))
         guard budget > 0 else { return [] }
 
-        // Evenly distributed with jitter across the night
-        let base = config.nightDuration / Double(budget)
-        return (0..<budget).map { i in
-            let start = Double(i) * base
-            let jitter = Double.random(in: 0..<(base * 0.8))
-            return start + jitter
+        // Attack density peaks at midnight and fades toward sunset/dawn.
+        // w(t) = 0.5 × (1 − cos(2π × t / T)) — sine bell centered at T/2.
+        // Generated via rejection sampling: propose uniform t, accept with probability w(t).
+        var times: [TimeInterval] = []
+        while times.count < budget {
+            let t = Double.random(in: 0..<config.nightDuration)
+            let weight = 0.5 * (1 - cos(2 * .pi * t / config.nightDuration))
+            if Double.random(in: 0...1) < weight {
+                times.append(t)
+            }
         }
+        return times.sorted()
     }
 
     func chooseTarget(from organisms: [(id: UUID, depth: CGFloat)]) -> UUID? {

@@ -9,10 +9,10 @@ import Foundation
 
 struct QLearningExperience: Identifiable, Sendable {
     let id: UUID = UUID()
-    let state: SensorInput
+    let state: OrganismState
     let actionIndex: Int
     let reward: Double
-    let nextState: SensorInput?
+    let nextState: OrganismState?
 }
 
 actor QLearner {
@@ -46,6 +46,7 @@ actor QLearner {
     private let surpriseRatio: Double = 0.25
     private let surpriseThreshold: Double = 2.0
     private let deathPenalty: Double = -80
+    private let attackPenalty: Double = -0.5  // Separate signal: predation ≠ starvation
     private(set) var tau: Double = 0.005
     private let diagnosticsMinSteps: Int = 10
     private let diagnosticsStreakThreshold: Int = 3
@@ -85,7 +86,7 @@ actor QLearner {
     func setTau(_ value: Double) { tau = min(0.1, max(0.001, value)) }
     func setDeltaWeight(_ value: Double) { deltaWeight = min(1.0, max(0.0, value)) }
     
-    func reportExperience(currentState: SensorInput, nextState: SensorInput?, actionIndex: Int, didDie: Bool) {
+    func reportExperience(currentState: OrganismState, nextState: OrganismState?, actionIndex: Int) {
         let reward = calculateReward(currentState: currentState, nextState: nextState)
         let step = QLearningExperience(
             state: currentState,
@@ -140,17 +141,19 @@ actor QLearner {
         var targets: [Double] = []
         targets.reserveCapacity(batch.count)
         for step in batch {
-            if let nextState = step.nextState {
-                let nextQ = targetNetwork.predict(inputs: nextState.normalized)
-                if let maxNextQ = nextQ.max() {
-                    targets.append(step.reward + gamma * maxNextQ)
-                } else {
-                    targets.append(step.reward)
-                }
-            } else {
-                targets.append(step.reward)
-            }
+			guard let nextState = step.nextState else {
+				targets.append(step.reward)
+				continue
+			}
+               
+			let nextQ = targetNetwork.predict(inputs: nextState.normalized)
+			if let maxNextQ = nextQ.max() {
+				targets.append(step.reward + gamma * maxNextQ)
+			} else {
+				fatalError("nextQ can't be empty")
+			}
         }
+		
         return targets
     }
 
@@ -248,7 +251,7 @@ actor QLearner {
         return detected.filter { (warningStreaks[$0.description] ?? 0) >= diagnosticsStreakThreshold }
     }
 
-    private func calculateReward(currentState: SensorInput, nextState: SensorInput?) -> Double {
+    private func calculateReward(currentState: OrganismState, nextState: OrganismState?) -> Double {
         guard let nextState else { return deathPenalty }
 
         // Absolute wellbeing: how full is the organism right now? ∈ [0, 1]
@@ -263,7 +266,10 @@ actor QLearner {
             : max(delta / energyCalculator.maxLossPerTick, -1.0)  // ∈ [-1, 0]
 
         // Alpha blend: deltaWeight=0 → pure survival signal, deltaWeight=1 → pure sensation
-        return (1.0 - deltaWeight) * absolute + deltaWeight * normalizedDelta
+        let baseReward = (1.0 - deltaWeight) * absolute + deltaWeight * normalizedDelta
+
+        // Explicit attack penalty: separate signal so the network learns predation ≠ hunger.
+        return currentState.wasAttacked ? baseReward + attackPenalty : baseReward
     }
 }
 

@@ -12,7 +12,7 @@ struct OrganismPopover: View {
     let network: NeuralNetwork
     let onTapCloseButton: () -> Void
 
-    @State private var inputStream: AsyncStream<SensorInput>?
+    @State private var inputStream: AsyncStream<OrganismState>?
 
     var body: some View {
         Group {

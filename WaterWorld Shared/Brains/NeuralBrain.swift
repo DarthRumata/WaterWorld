@@ -14,7 +14,7 @@ actor NeuralBrain: BrainProtocol {
         .dense(3, activation: .softmax)
         .build(weightInitStrategy: .uniformXavier)
     
-    func calculateResponse(on input: SensorInput) async -> OrganismModel.Action {
+    func calculateResponse(on input: OrganismState) async -> OrganismModel.Action {
         let inputs = input.normalized
         let actionStimuli = network.predict(inputs: inputs)
         

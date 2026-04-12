@@ -35,7 +35,7 @@ actor OrganismModel: Equatable {
             self.actionContinuation = continuation
         }
     }
-    var inputsPublisher: AsyncStream<SensorInput> {
+    var inputsPublisher: AsyncStream<OrganismState> {
         AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             self.inputsContinuation = continuation
             if let lastInput {
@@ -48,13 +48,14 @@ actor OrganismModel: Equatable {
     
     @Published private(set) var energy = GlobalConstants.maxEnergy
     private var isBusy = false
-    private var lastInput: SensorInput? = nil
+    private var lastInput: OrganismState? = nil
     private(set) var isDead: Bool = false
+    private var wasAttackedThisTick: Bool = false
     
     // Triggers
     
     private var actionContinuation: AsyncStream<Action>.Continuation?
-    private var inputsContinuation: AsyncStream<SensorInput>.Continuation?
+    private var inputsContinuation: AsyncStream<OrganismState>.Continuation?
     
     // Handlers
     
@@ -86,16 +87,26 @@ actor OrganismModel: Equatable {
     }
     
     // Public methods
-    func handleChanges(_ input: SensorInput) async {
+    func handleChanges(lightLevel: Double, depth: Double, dayProgress: Double) async {
         if isDead { return }
-        
+
         isBusy = true
-        
+
         energy -= GlobalConstants.idleEnergyLoss
-        gainEnergy(fromLightLevel: input.lightLevel)
-        lastInput = input
-        inputsContinuation?.yield(input)
-        await calculateNextAction(input: input)
+        gainEnergy(fromLightLevel: lightLevel)
+
+        let state = OrganismState(
+            lightLevel: lightLevel,
+            depth: depth,
+            dayProgress: dayProgress,
+            energy: energy,
+            wasAttacked: wasAttackedThisTick
+        )
+        wasAttackedThisTick = false
+
+        lastInput = state
+        inputsContinuation?.yield(state)
+        await calculateNextAction(input: state)
     }
     
     func setIsBusy(_ busy: Bool) {
@@ -105,6 +116,7 @@ actor OrganismModel: Equatable {
     func applyDamage(_ amount: Double) {
         if isDead { return }
         energy = max(0, energy - amount)
+        wasAttackedThisTick = true
     }
     
     func kill() {
@@ -113,14 +125,10 @@ actor OrganismModel: Equatable {
         // Set energy to 0 before reporting, without triggering another step
         energy = 0
         Task { @MainActor in
-            await brain.finishEpisode(didDie: true)
+            await brain.reportDeath()
             onDeath(self, .predation)
             await tracker.reportGatheredStatistics(forName: name)
         }
-    }
-    
-    func finishEpisodeSurvived() async {
-        await brain.finishEpisode(didDie: false)
     }
 
     func updateBrainNetwork(_ network: NeuralNetwork, epsilon: Double) async {
@@ -134,7 +142,7 @@ actor OrganismModel: Equatable {
             if energyValue <= 0 {
                 if !isDead {
                     isDead = true
-                    await brain.finishEpisode(didDie: true)
+                    await brain.reportDeath()
                     await onDeath(self, .energyDepletion)
                     await tracker.reportGatheredStatistics(forName: name)
                 }
@@ -143,7 +151,7 @@ actor OrganismModel: Equatable {
         }
     }
     
-    private func calculateNextAction(input: SensorInput) async {
+    private func calculateNextAction(input: OrganismState) async {
         let action: Action = await brain.calculateResponse(on: input)
    
         if action != .wait {

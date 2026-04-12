@@ -39,7 +39,7 @@
 				Models/NeuralNetworkSnapshot.swift,
 				Models/Neuron.swift,
 				Models/OrganismModel.swift,
-				Models/SensorInput.swift,
+				Models/OrganismState.swift,
 				Models/SimulationMode.swift,
 				PredationManager.swift,
 				PredationSystem.swift,

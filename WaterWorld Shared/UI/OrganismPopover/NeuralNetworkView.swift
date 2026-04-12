@@ -13,7 +13,7 @@ import AppKit
 #endif
 
 struct NeuralNetworkViewModel {
-    let inputs: SensorInput
+    let inputs: OrganismState
     let layers: [NeuralLayerViewModel]
 }
 
@@ -24,7 +24,7 @@ struct NeuralLayerViewModel {
 
 struct NeuralNetworkView: View {
     let network: NeuralNetwork
-    let inputStream: AsyncStream<SensorInput>
+    let inputStream: AsyncStream<OrganismState>
     let name: String
     let onTapCloseButton: () -> Void
 
@@ -126,7 +126,7 @@ struct NeuralNetworkView: View {
         }
     }
 
-    private func generateViewModel(for input: SensorInput) -> NeuralNetworkViewModel {
+    private func generateViewModel(for input: OrganismState) -> NeuralNetworkViewModel {
         var inputs = input.normalized
         var layerViewModels = [NeuralLayerViewModel]()
 
@@ -196,7 +196,7 @@ private struct SizePreferenceKey: PreferenceKey {
 }
 
 struct InputsView: View {
-    let inputs: SensorInput
+    let inputs: OrganismState
 
     var body: some View {
         HStack(spacing: 10) {
