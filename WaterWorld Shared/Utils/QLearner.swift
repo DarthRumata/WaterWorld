@@ -33,7 +33,7 @@ actor QLearner {
     private let batchSize: Int
 	private var epsilonGreedy: Double
     private(set) var gamma: Double
-	private let learningRate: Double
+    private(set) var learningRate: Double
     private(set) var deltaWeight: Double
     private var costFunction: any CostFunction
     private let energyCalculator = EnergyCalculator()
@@ -42,7 +42,7 @@ actor QLearner {
     private let maxSurpriseBufferSize: Int = 50000
     private let trainInterval = 960
     private let epsilonMin: Double = 0.04
-    private let epsilonDecay: Double = 0.995
+    private(set) var epsilonDecay: Double
     private let surpriseRatio: Double = 0.25
     private let surpriseThreshold: Double = 2.0
     private let deathPenalty: Double = -80
@@ -58,12 +58,14 @@ actor QLearner {
     private var stepsSinceLastTrain = 0
     private var learningStepsCount = 0
     private var warningStreaks: [String: Int] = [:]
+    private var isTraining = false
 
     init(
         epsilonGreedy: Double,
         gamma: Double,
         batchSize: Int,
         learningRate: Double,
+        epsilonDecay: Double,
         deltaWeight: Double,
         costFunction: any CostFunction,
         networkUpdateHandler: (@Sendable (NeuralNetwork, Double) async -> Void)?,
@@ -73,6 +75,7 @@ actor QLearner {
         self.gamma = gamma
         self.batchSize = batchSize
         self.learningRate = learningRate
+        self.epsilonDecay = epsilonDecay
         self.deltaWeight = deltaWeight
         self.costFunction = costFunction
         self.networkUpdateHandler = networkUpdateHandler
@@ -82,13 +85,15 @@ actor QLearner {
     var currentEpsilon: Double { epsilonGreedy }
 
     func setCostFunction(_ type: CostFunctionType) { costFunction = type.make() }
-    func setGamma(_ value: Double) { gamma = min(0.999, max(0.01, value)) }
-    func setTau(_ value: Double) { tau = min(0.1, max(0.001, value)) }
-    func setDeltaWeight(_ value: Double) { deltaWeight = min(1.0, max(0.0, value)) }
+    func setGamma(_ value: Double)        { gamma        = min(0.999,  max(0.01,   value)) }
+    func setTau(_ value: Double)          { tau          = min(0.1,    max(0.001,  value)) }
+    func setDeltaWeight(_ value: Double)  { deltaWeight  = min(1.0,    max(0.0,    value)) }
+    func setLearningRate(_ value: Double) { learningRate = min(0.1,    max(0.0001, value)) }
+    func setEpsilonDecay(_ value: Double) { epsilonDecay = min(0.9999, max(0.99,   value)) }
     
     func reportExperience(currentState: OrganismState, nextState: OrganismState?, actionIndex: Int) {
         let reward = calculateReward(currentState: currentState, nextState: nextState)
-        let step = QLearningExperience(
+        let experience = QLearningExperience(
             state: currentState,
             actionIndex: actionIndex,
             reward: reward,
@@ -96,124 +101,78 @@ actor QLearner {
         )
         
         if normalBuffer.count < maxBufferSize {
-            normalBuffer.append(step)
+            normalBuffer.append(experience)
         } else {
-            normalBuffer[normalBufferIndex] = step
+            normalBuffer[normalBufferIndex] = experience
             normalBufferIndex = (normalBufferIndex + 1) % maxBufferSize
         }
+
+        guard !isTraining else { return }
 
         stepsSinceLastTrain += 1
 
         if normalBuffer.count >= batchSize && stepsSinceLastTrain >= trainInterval {
-			stepsSinceLastTrain = 0 // Сбрасываем счетчик
-			
-			Task { [weak self] in
-				await self?.trainOnMiniBatch()
-			}
-		}
-		
-		// Also forward to a shared store for UI reporting
-		Task {
-			await QLearningStore.shared.append(step)
-		}
-    }
-    
-    private func trainOnMiniBatch() async {
-        let wantedSurprise = Int(Double(batchSize) * surpriseRatio)
-        let actualSurprise = min(wantedSurprise, surpriseBuffer.count)
-        let normalCount = batchSize - actualSurprise
-        var batch: [QLearningExperience] = []
-        batch.reserveCapacity(batchSize)
-        for _ in 0..<normalCount {
-            if let step = normalBuffer.randomElement() { batch.append(step) }
-        }
-        for _ in 0..<actualSurprise {
-            if let step = surpriseBuffer.randomElement() { batch.append(step) }
-        }
-
-        await learn(from: batch)
-    }
-    
-    // MARK: - Learning
-
-    /// Compute DQN targets for a batch: if nextState is nil -> target = reward; else target = reward + gamma * max_a' Q_target(nextState, a')
-    private func computeTargets(for batch: [QLearningExperience]) -> [Double] {
-        var targets: [Double] = []
-        targets.reserveCapacity(batch.count)
-        for step in batch {
-			guard let nextState = step.nextState else {
-				targets.append(step.reward)
-				continue
-			}
-               
-			let nextQ = targetNetwork.predict(inputs: nextState.normalized)
-			if let maxNextQ = nextQ.max() {
-				targets.append(step.reward + gamma * maxNextQ)
-			} else {
-				fatalError("nextQ can't be empty")
-			}
-        }
-		
-        return targets
-    }
-
-    private func learn(from batch: [QLearningExperience]) async {
-        guard !batch.isEmpty else { return }
-
-        // Predict Q(s, ·) for taken actions using main network, also track max Q for monitoring
-        var predictedQsForTakenActions: [Double] = []
-        var maxQSum: Double = 0
-        predictedQsForTakenActions.reserveCapacity(batch.count)
-        for step in batch {
-            let currentQ = mainNetwork.predict(inputs: step.state.normalized)
-            predictedQsForTakenActions.append(currentQ[step.actionIndex])
-            maxQSum += currentQ.max() ?? 0
-        }
-
-        // Compute DQN targets with target network
-        let targets = computeTargets(for: batch)
-
-        // Compute loss for monitoring/training step
-        let mseLoss = costFunction.loss(predictions: predictedQsForTakenActions, targets: targets)
-
-        // Yield so other actor requests (e.g. neuralNetwork reads) can be served between phases
-        await Task.yield()
-
-        for (step, target) in zip(batch, targets) {
-            let inputs = step.state.normalized
-            let predicted = mainNetwork.predict(inputs: inputs)
-            let grad = costFunction.gradient(prediction: predicted[step.actionIndex], target: target)
-            let tdError = abs(grad)
-            var error = Array(repeating: 0.0, count: predicted.count)
-            error[step.actionIndex] = grad
-            mainNetwork.backward(error: error, inputs: inputs, learningRate: learningRate)
-
-            if tdError > surpriseThreshold {
-                if surpriseBuffer.count < maxSurpriseBufferSize {
-                    surpriseBuffer.append(step)
-                } else {
-                    surpriseBuffer[surpriseBufferIndex] = step
-                    surpriseBufferIndex = (surpriseBufferIndex + 1) % maxSurpriseBufferSize
-                }
+            stepsSinceLastTrain = 0
+            isTraining = true
+            Task { [weak self] in
+                await self?.trainOnMiniBatch()
             }
         }
 		
-		learningStepsCount += 1
-		epsilonGreedy = max(epsilonMin, epsilonGreedy * epsilonDecay)
+		// Also forward to a shared store for UI reporting
+		Task {
+			await QLearningStore.shared.append(experience)
+		}
+    }
+	
+	func applySnapshot(_ snapshot: NeuralNetworkSnapshot) throws {
+		guard let network = NeuralNetwork(snapshot: snapshot) else {
+			throw CocoaError(.fileReadCorruptFile)
+		}
+		mainNetwork = network
+		targetNetwork = network
+	}
+    
+    // MARK: - Learning
+	
+	private func trainOnMiniBatch() async {
+		let wantedSurprise = Int(Double(batchSize) * surpriseRatio)
+		let actualSurprise = min(wantedSurprise, surpriseBuffer.count)
+		let normalCount = batchSize - actualSurprise
+		var batch: [QLearningExperience] = []
+		batch.reserveCapacity(batchSize)
+		for _ in 0..<normalCount {
+			if let experience = normalBuffer.randomElement() { batch.append(experience) }
+		}
+		for _ in 0..<actualSurprise {
+			if let experience = surpriseBuffer.randomElement() { batch.append(experience) }
+		}
+
+		learn(from: batch)
+        isTraining = false
+	}
+
+    private func learn(from batch: [QLearningExperience]) {
+        guard !batch.isEmpty else { return }
+
+        let (predictedQs, targets, maxQSum) = computeBatchPredictions(batch: batch)
+        let mseLoss = costFunction.loss(predictions: predictedQs, targets: targets)
+
+        applyBackprop(batch: batch, targets: targets)
+
+        learningStepsCount += 1
+        epsilonGreedy = max(epsilonMin, epsilonGreedy * epsilonDecay)
         // Soft update: target slowly tracks main (τ=0.005 ≈ 0.5% per step).
         // Keeps training stable — no sudden weight jumps unlike hard copy every N steps.
         targetNetwork.polyakBlend(toward: mainNetwork, tau: tau)
 
-        let avgReward = batch.map { $0.reward }.reduce(0, +) / Double(batch.count)
-        let avgMaxQ = maxQSum / Double(batch.count)
-
-        let net = mainNetwork
         let eps = epsilonGreedy
-        let handler = networkUpdateHandler
-        Task { await handler?(net, eps) }
+        let net = mainNetwork
+        Task { await networkUpdateHandler?(net, eps) }
 
         let sustainedWarnings = diagnoseLearningHealth(batch: batch)
-        let warningHandler = sustainedWarningHandler
+        let avgReward = batch.map { $0.reward }.reduce(0, +) / Double(batch.count)
+        let avgMaxQ = maxQSum / Double(batch.count)
 
         Task { @MainActor in
             QLearningStore.shared.appendLoss(mseLoss, epsilon: eps)
@@ -221,18 +180,63 @@ actor QLearner {
             QLearningStore.shared.appendMaxQTrend(avgMaxQ)
             QLearningStore.shared.updateLearningWarnings(sustainedWarnings)
         }
-
         if !sustainedWarnings.isEmpty {
-            Task { await warningHandler?(sustainedWarnings) }
+            Task { await self.sustainedWarningHandler?(sustainedWarnings) }
         }
     }
-    
-    func applySnapshot(_ snapshot: NeuralNetworkSnapshot) throws {
-        guard let network = NeuralNetwork(snapshot: snapshot) else {
-            throw CocoaError(.fileReadCorruptFile)
+
+    /// Single forward pass over the batch: computes current Q-values (main network),
+    /// Double DQN targets (main selects action, target evaluates), and avg max Q for monitoring.
+    private func computeBatchPredictions(
+        batch: [QLearningExperience]
+    ) -> (predictedQs: [Double], targets: [Double], maxQSum: Double) {
+        var predictedQs: [Double] = []
+        var targets: [Double] = []
+        var maxQSum: Double = 0
+        predictedQs.reserveCapacity(batch.count)
+        targets.reserveCapacity(batch.count)
+
+        for experience in batch {
+            let currentQ = mainNetwork.predict(inputs: experience.state.normalized)
+            predictedQs.append(currentQ[experience.actionIndex])
+            maxQSum += currentQ.max() ?? 0
+
+            if let nextState = experience.nextState {
+                // Double DQN: main network selects action, target network evaluates it.
+                // Decouples action selection from value estimation → reduces overestimation bias.
+                let nextMainQ = mainNetwork.predict(inputs: nextState.normalized)
+                let bestAction = nextMainQ.indices.max(by: { nextMainQ[$0] < nextMainQ[$1] }) ?? 0
+                let nextTargetQ = targetNetwork.predict(inputs: nextState.normalized)
+                targets.append(experience.reward + gamma * nextTargetQ[bestAction])
+            } else {
+                targets.append(experience.reward)
+            }
         }
-        mainNetwork = network
-        targetNetwork = network
+        return (predictedQs, targets, maxQSum)
+    }
+
+    /// Backprop loop: updates main network weights and populates the surprise buffer.
+    /// Uses fresh predict() per step so each gradient reflects the current network state
+    /// after previous updates — preserving the original sequential update dynamics.
+    private func applyBackprop(batch: [QLearningExperience], targets: [Double]) {
+        let actionCount = OrganismModel.Action.allCases.count
+        for (experience, target) in zip(batch, targets) {
+            let inputs = experience.state.normalized
+            let predicted = mainNetwork.predict(inputs: inputs)
+            let grad = costFunction.gradient(prediction: predicted[experience.actionIndex], target: target)
+            var error = Array(repeating: 0.0, count: actionCount)
+            error[experience.actionIndex] = grad
+            mainNetwork.backward(error: error, inputs: inputs, learningRate: learningRate)
+
+            if abs(grad) > surpriseThreshold {
+                if surpriseBuffer.count < maxSurpriseBufferSize {
+                    surpriseBuffer.append(experience)
+                } else {
+                    surpriseBuffer[surpriseBufferIndex] = experience
+                    surpriseBufferIndex = (surpriseBufferIndex + 1) % maxSurpriseBufferSize
+                }
+            }
+        }
     }
 	
     private func diagnoseLearningHealth(batch: [QLearningExperience]) -> [LearningWarning] {

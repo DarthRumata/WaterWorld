@@ -109,31 +109,43 @@ struct NeuralNetwork: Sendable {
     }
     
     /// Runs diagnostics on hidden layers using provided sample inputs.
-    /// - Dying ReLU: > 70% of neurons output 0 across all samples.
+    /// - Dying ReLU: a neuron is dead only if it outputs 0 on ALL samples (not just sometimes).
+    ///   Reports warning when > 70% of neurons in a ReLU layer are truly dead.
     /// - Exploding weights: mean |weight| > 10.
+    /// Single linear O(N) pass per sample — no redundant recomputation of earlier layers.
     func healthCheck(sampleInputs: [[Double]]) -> [LearningWarning] {
         guard !sampleInputs.isEmpty, layers.count > 1 else { return [] }
-        var warnings: [LearningWarning] = []
-        let hiddenLayers = layers.dropLast()
+        let hiddenLayers = Array(layers.dropLast())
 
-        for (layerIndex, layer) in hiddenLayers.enumerated() {
+        // zeroCount[layerIndex][neuronIndex] = how many samples produced 0 for this neuron
+        var zeroCount = hiddenLayers.map { Array(repeating: 0, count: $0.neurons.count) }
+
+        for input in sampleInputs {
+            var current = input
+            for (i, layer) in hiddenLayers.enumerated() {
+                let outputs = layer.computeOutputs(inputs: current)
+                for (j, output) in outputs.enumerated() where output == 0 {
+                    zeroCount[i][j] += 1
+                }
+                current = outputs
+            }
+        }
+
+        var warnings: [LearningWarning] = []
+        for (i, layer) in hiddenLayers.enumerated() {
             // Exploding weights check
             let allWeights = layer.neurons.flatMap(\.weights)
             let meanAbsWeight = allWeights.reduce(0.0) { $0 + abs($1) } / Double(max(allWeights.count, 1))
             if meanAbsWeight > 10.0 {
-                warnings.append(.explodingWeights(layerIndex: layerIndex, meanAbsWeight: meanAbsWeight))
+                warnings.append(.explodingWeights(layerIndex: i, meanAbsWeight: meanAbsWeight))
             }
 
-            // Dying ReLU check
+            // Dead neuron check: neuron is dead only if zero on ALL samples
             guard case .relu = layer.activation else { continue }
-            var deadCount = 0
-            for input in sampleInputs {
-                let layerInput = layers[0..<layerIndex].reduce(input) { current, l in l.computeOutputs(inputs: current) }
-                deadCount += layer.computeOutputs(inputs: layerInput).filter { $0 == 0 }.count
-            }
-            let deadRatio = Double(deadCount) / Double(layer.neurons.count * sampleInputs.count)
+            let deadNeurons = zeroCount[i].filter { $0 == sampleInputs.count }.count
+            let deadRatio = Double(deadNeurons) / Double(layer.neurons.count)
             if deadRatio > 0.7 {
-                warnings.append(.dyingReLU(layerIndex: layerIndex, deadRatio: deadRatio))
+                warnings.append(.dyingReLU(layerIndex: i, deadRatio: deadRatio))
             }
         }
         return warnings

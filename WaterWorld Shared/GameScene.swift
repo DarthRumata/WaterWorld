@@ -56,7 +56,7 @@ class GameScene: SKScene {
     
     // Utils
     
-    private let nameGenerator = UniqueNameGenerator(syllables: ["ka", "bar", "ma", "lo", "ni", "mek", "ta", "pon", "ger", "du"])
+    private let nameGenerator = UniqueNameGenerator(syllables: ["ka", "bar", "ma", "lo", "ni", "mek", "ta", "pon", "ger", "du", "mi", "ko", "do", "wa"])
     private let environment = EnvironmentService()
     private var predationManager: PredationManager!
     private var qLearner: QLearner!
@@ -98,6 +98,7 @@ class GameScene: SKScene {
             gamma: 0.99,
             batchSize: 128,
             learningRate: 0.01,
+            epsilonDecay: 0.995,
             deltaWeight: 0.05,
             costFunction: costFunctionType.make(),
             networkUpdateHandler: { [weak self] network, epsilon in
@@ -236,6 +237,16 @@ class GameScene: SKScene {
             guard let self else { return }
             Task { await self.qLearner.setDeltaWeight(value) }
             self.hudModel.deltaWeight = value
+        }
+        hudModel.onSetLearningRate = { [weak self] value in
+            guard let self else { return }
+            Task { await self.qLearner.setLearningRate(value) }
+            self.hudModel.learningRate = value
+        }
+        hudModel.onSetEpsilonDecay = { [weak self] value in
+            guard let self else { return }
+            Task { await self.qLearner.setEpsilonDecay(value) }
+            self.hudModel.epsilonDecay = value
         }
         hudModel.onTapMetric = { [weak self] tab in self?.presentMetricsChart(tab: tab) }
         hudModel.onSaveNetwork = { [weak self] in

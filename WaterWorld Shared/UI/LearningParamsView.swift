@@ -5,30 +5,16 @@ struct LearningParamsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            paramRow(
-                symbol: "γ", label: "Gamma",
-                value: hud.gamma,
-                format: "%.3f",
-                step: 0.01,
-                onDecrement: { hud.onSetGamma(hud.gamma - 0.01) },
-                onIncrement: { hud.onSetGamma(hud.gamma + 0.01) }
-            )
-            paramRow(
-                symbol: "τ", label: "Tau",
-                value: hud.tau,
-                format: "%.3f",
-                step: 0.001,
-                onDecrement: { hud.onSetTau(hud.tau - 0.001) },
-                onIncrement: { hud.onSetTau(hud.tau + 0.001) }
-            )
-            paramRow(
-                symbol: "Δw", label: "Delta",
-                value: hud.deltaWeight,
-                format: "%.2f",
-                step: 0.05,
-                onDecrement: { hud.onSetDeltaWeight(hud.deltaWeight - 0.05) },
-                onIncrement: { hud.onSetDeltaWeight(hud.deltaWeight + 0.05) }
-            )
+            paramRow(symbol: "γ",  value: hud.gamma,        format: "%.3f",  step: 0.01,  onSet: hud.onSetGamma,
+                     hint: "Discount factor — насколько будущие награды важны сейчас.\n0.99 = дальновидный, 0.5 = живёт моментом.")
+            paramRow(symbol: "τ",  value: hud.tau,          format: "%.4f",  step: 0.001, onSet: hud.onSetTau,
+                     hint: "Polyak averaging — скорость обновления target-сети.\n0.005 = плавное скольжение, 0.1 = быстрая синхронизация.")
+            paramRow(symbol: "α",  value: hud.learningRate, format: "%.4f",  step: 0.001, onSet: hud.onSetLearningRate,
+                     hint: "Learning rate — размер шага обновления весов.\nМало = медленно, много = нестабильно.")
+            paramRow(symbol: "εd", value: hud.epsilonDecay, format: "%.4f",  step: 0.001, onSet: hud.onSetEpsilonDecay,
+                     hint: "Epsilon decay — скорость перехода exploration → exploitation.\n0.999 = медленно, 0.99 = быстро.")
+            paramRow(symbol: "Δw", value: hud.deltaWeight,  format: "%.2f",  step: 0.05,  onSet: hud.onSetDeltaWeight,
+                     hint: "Reward blend — баланс между сытостью и ощущением.\n0 = только уровень энергии, 1 = только изменение энергии.")
         }
         .font(.system(size: 12, design: .monospaced))
         .foregroundStyle(Color(white: 0.15))
@@ -36,21 +22,22 @@ struct LearningParamsView: View {
 
     private func paramRow(
         symbol: String,
-        label: String,
         value: Double,
         format: String,
         step: Double,
-        onDecrement: @escaping () -> Void,
-        onIncrement: @escaping () -> Void
+        onSet: @escaping (Double) -> Void,
+        hint: String
     ) -> some View {
         HStack(spacing: 4) {
             Text(symbol)
                 .frame(width: 20, alignment: .leading)
                 .foregroundStyle(Color(white: 0.4))
-            Button("-", action: onDecrement).buttonStyle(HUDButtonStyle())
+            Button("-") { onSet(value - step) }.buttonStyle(HUDButtonStyle())
             Text(String(format: format, value))
-                .frame(width: 40, alignment: .center)
-            Button("+", action: onIncrement).buttonStyle(HUDButtonStyle())
+                .lineLimit(1)
+                .fixedSize()
+            Button("+") { onSet(value + step) }.buttonStyle(HUDButtonStyle())
         }
+        .help(hint)
     }
 }

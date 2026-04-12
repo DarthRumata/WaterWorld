@@ -92,6 +92,8 @@ actor OrganismModel: Equatable {
 
         isBusy = true
 
+        // Capture energy before this tick's changes
+        let energySnapshot = energy
         energy -= GlobalConstants.idleEnergyLoss
         gainEnergy(fromLightLevel: lightLevel)
 
@@ -99,7 +101,7 @@ actor OrganismModel: Equatable {
             lightLevel: lightLevel,
             depth: depth,
             dayProgress: dayProgress,
-            energy: energy,
+            energy: energySnapshot,
             wasAttacked: wasAttackedThisTick
         )
         wasAttackedThisTick = false

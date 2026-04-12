@@ -25,6 +25,8 @@ final class GameHUDModel {
     // MARK: - Learning params
     var gamma: Double = 0.99
     var tau: Double = 0.005
+    var learningRate: Double = 0.01
+    var epsilonDecay: Double = 0.995
     var deltaWeight: Double = 0.05
 
     // MARK: - Actions
@@ -38,6 +40,8 @@ final class GameHUDModel {
     var onSelectCostFunction: (CostFunctionType) -> Void = { _ in }
     var onSetGamma: (Double) -> Void = { _ in }
     var onSetTau: (Double) -> Void = { _ in }
+    var onSetLearningRate: (Double) -> Void = { _ in }
+    var onSetEpsilonDecay: (Double) -> Void = { _ in }
     var onSetDeltaWeight: (Double) -> Void = { _ in }
     var onTapMetric: (MetricTab) -> Void = { _ in }
     var onSaveNetwork: () -> Void = {}
