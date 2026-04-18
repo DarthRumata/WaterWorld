@@ -40,8 +40,11 @@ extension Activation {
             return sigmoid * (1 - sigmoid)
         case .relu:
             return z > 0 ? 1.0 : 0.0
-        case .softmax, .linear:
+        case .linear:
             return 1.0
+        case .softmax:
+            // Softmax Jacobian is non-diagonal — use NeuralLayer.computeDeltas instead.
+            fatalError("derivative(at:) must not be called for softmax")
         }
     }
 }
@@ -222,15 +225,34 @@ struct NeuralLayer: Sendable {
     }
 
     mutating func backward(error: [Double], inputs: [Double], zs: [Double], learningRate: Double) -> [Double] {
+        let deltas = computeDeltas(error: error, zs: zs)
         var prevLayerError = [Double](repeating: 0.0, count: neurons[0].weights.count)
         for i in neurons.indices {
-            let delta = error[i] * activation.derivative(at: zs[i])
             for j in neurons[i].weights.indices {
-                prevLayerError[j] += neurons[i].weights[j] * delta
+                prevLayerError[j] += neurons[i].weights[j] * deltas[i]
             }
-            neurons[i].updateWeights(learningRate: learningRate, delta: delta, inputs: inputs)
+            neurons[i].updateWeights(learningRate: learningRate, delta: deltas[i], inputs: inputs)
         }
         return prevLayerError
+    }
+
+    /// Computes per-neuron deltas (∂L/∂z) for all activations.
+    /// Softmax requires the full Jacobian-vector product and cannot be handled elementwise.
+    private func computeDeltas(error: [Double], zs: [Double]) -> [Double] {
+        switch activation {
+        case .softmax:
+            // s = softmax(z)
+            let maxZ = zs.max() ?? 0
+            let exps = zs.map { exp($0 - maxZ) }
+            let sumExp = exps.reduce(0.0, +)
+            let s = exps.map { $0 / sumExp }
+            // Jacobian-vector product: ∂L/∂z_i = s_i * (e_i − Σ_j e_j·s_j)
+            let dot = zip(error, s).reduce(0.0) { $0 + $1.0 * $1.1 }
+            return zip(s, error).map { si, ei in si * (ei - dot) }
+        default:
+            // All other activations have diagonal Jacobians — elementwise multiply is correct.
+            return zip(error, zs).map { ei, zi in ei * activation.derivative(at: zi) }
+        }
     }
 }
 

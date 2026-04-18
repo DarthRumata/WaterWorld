@@ -27,10 +27,11 @@ actor OrganismTracker {
         lastProgress = dayProgress
     }
     
-    func reportGatheredStatistics(forName name: String) async {
+    func reportGatheredStatistics(forName name: String) async -> Int {
         await logger.log(message: "Report for: \(name)")
         for (day, actionCount) in actionsPerDay.enumerated() {
             await logger.log(message: "Day: \(day), actions: \(actionCount)")
         }
+        return actionsPerDay.count
     }
 }

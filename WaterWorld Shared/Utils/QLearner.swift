@@ -17,7 +17,7 @@ struct QLearningExperience: Identifiable, Sendable {
 
 actor QLearner {
     static func makeNetwork() -> NeuralNetwork {
-        NeuralNetworkBuilder(inputSize: 4)
+        NeuralNetworkBuilder(inputSize: 5)
             .dense(10, activation: .relu)
             .dense(10, activation: .relu)
             .dense(3, activation: .linear)
@@ -34,9 +34,7 @@ actor QLearner {
 	private var epsilonGreedy: Double
     private(set) var gamma: Double
     private(set) var learningRate: Double
-    private(set) var deltaWeight: Double
     private var costFunction: any CostFunction
-    private let energyCalculator = EnergyCalculator()
 
     private let maxBufferSize: Int = 550000
     private let maxSurpriseBufferSize: Int = 50000
@@ -44,12 +42,13 @@ actor QLearner {
     private let epsilonMin: Double = 0.04
     private(set) var epsilonDecay: Double
     private let surpriseRatio: Double = 0.25
-    private let surpriseThreshold: Double = 2.0
-    private let deathPenalty: Double = -80
-    private let attackPenalty: Double = -0.5  // Separate signal: predation ≠ starvation
+    private var tdStats = SurpriseThresholdTracker()
+    private(set) var deathPenalty: Double = -1.0
     private(set) var tau: Double = 0.005
     private let diagnosticsMinSteps: Int = 10
     private let diagnosticsStreakThreshold: Int = 3
+
+    private(set) var isLearningEnabled: Bool = false
 
     private var normalBuffer: [QLearningExperience] = []
     private var normalBufferIndex: Int = 0
@@ -66,7 +65,6 @@ actor QLearner {
         batchSize: Int,
         learningRate: Double,
         epsilonDecay: Double,
-        deltaWeight: Double,
         costFunction: any CostFunction,
         networkUpdateHandler: (@Sendable (NeuralNetwork, Double) async -> Void)?,
         sustainedWarningHandler: (@Sendable ([LearningWarning]) async -> Void)?
@@ -76,7 +74,6 @@ actor QLearner {
         self.batchSize = batchSize
         self.learningRate = learningRate
         self.epsilonDecay = epsilonDecay
-        self.deltaWeight = deltaWeight
         self.costFunction = costFunction
         self.networkUpdateHandler = networkUpdateHandler
         self.sustainedWarningHandler = sustainedWarningHandler
@@ -84,14 +81,17 @@ actor QLearner {
 
     var currentEpsilon: Double { epsilonGreedy }
 
+    func setLearningEnabled(_ enabled: Bool) { isLearningEnabled = enabled }
+
     func setCostFunction(_ type: CostFunctionType) { costFunction = type.make() }
     func setGamma(_ value: Double)        { gamma        = min(0.999,  max(0.01,   value)) }
     func setTau(_ value: Double)          { tau          = min(0.1,    max(0.001,  value)) }
-    func setDeltaWeight(_ value: Double)  { deltaWeight  = min(1.0,    max(0.0,    value)) }
+    func setDeathPenalty(_ value: Double)  { deathPenalty  = min(0.0,   max(-1.0,  value)) }
     func setLearningRate(_ value: Double) { learningRate = min(0.1,    max(0.0001, value)) }
     func setEpsilonDecay(_ value: Double) { epsilonDecay = min(0.9999, max(0.99,   value)) }
     
     func reportExperience(currentState: OrganismState, nextState: OrganismState?, actionIndex: Int) {
+        guard isLearningEnabled else { return }
         let reward = calculateReward(currentState: currentState, nextState: nextState)
         let experience = QLearningExperience(
             state: currentState,
@@ -99,6 +99,10 @@ actor QLearner {
             reward: reward,
             nextState: nextState
         )
+		
+		Task {
+			await QLearningStore.shared.append(experience)
+		}
         
         if normalBuffer.count < maxBufferSize {
             normalBuffer.append(experience)
@@ -118,20 +122,22 @@ actor QLearner {
                 await self?.trainOnMiniBatch()
             }
         }
-		
-		// Also forward to a shared store for UI reporting
-		Task {
-			await QLearningStore.shared.append(experience)
-		}
     }
 	
-	func applySnapshot(_ snapshot: NeuralNetworkSnapshot) throws {
-		guard let network = NeuralNetwork(snapshot: snapshot) else {
-			throw CocoaError(.fileReadCorruptFile)
-		}
-		mainNetwork = network
-		targetNetwork = network
-	}
+    func applySnapshot(_ snapshot: NeuralNetworkSnapshot) throws {
+        guard let network = NeuralNetwork(snapshot: snapshot) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        mainNetwork = network
+        targetNetwork = network
+
+        let net = mainNetwork
+        let eps = epsilonGreedy
+        Task { await networkUpdateHandler?(net, eps) }
+        Task { @MainActor in
+            QLearningStore.shared.updateCurrentNetwork(net)
+        }
+    }
     
     // MARK: - Learning
 	
@@ -179,6 +185,7 @@ actor QLearner {
             QLearningStore.shared.appendRewardTrend(avgReward)
             QLearningStore.shared.appendMaxQTrend(avgMaxQ)
             QLearningStore.shared.updateLearningWarnings(sustainedWarnings)
+            QLearningStore.shared.updateCurrentNetwork(net)
         }
         if !sustainedWarnings.isEmpty {
             Task { await self.sustainedWarningHandler?(sustainedWarnings) }
@@ -223,12 +230,14 @@ actor QLearner {
         for (experience, target) in zip(batch, targets) {
             let inputs = experience.state.normalized
             let predicted = mainNetwork.predict(inputs: inputs)
-            let grad = costFunction.gradient(prediction: predicted[experience.actionIndex], target: target)
+            let prediction = predicted[experience.actionIndex]
+            let isSurprising = tdStats.observe(prediction: prediction, target: target)
+            let grad = costFunction.gradient(prediction: prediction, target: target)
             var error = Array(repeating: 0.0, count: actionCount)
             error[experience.actionIndex] = grad
             mainNetwork.backward(error: error, inputs: inputs, learningRate: learningRate)
 
-            if abs(grad) > surpriseThreshold {
+            if isSurprising {
                 if surpriseBuffer.count < maxSurpriseBufferSize {
                     surpriseBuffer.append(experience)
                 } else {
@@ -258,23 +267,27 @@ actor QLearner {
     private func calculateReward(currentState: OrganismState, nextState: OrganismState?) -> Double {
         guard let nextState else { return deathPenalty }
 
-        // Absolute wellbeing: how full is the organism right now? ∈ [0, 1]
-        let absolute = nextState.energy / GlobalConstants.maxEnergy
+        var r = GlobalConstants.rewardTickSurvivalBonus
 
-        // Normalized sensation: how much did energy change this tick?
-        // Asymmetric bounds: gain is harder to achieve than loss, so each direction
-        // is normalized independently to keep the full [-1, 1] range meaningful.
-        let delta = nextState.energy - currentState.energy
-        let normalizedDelta = delta >= 0
-            ? min(delta / energyCalculator.maxGainPerTick, 1.0)   // ∈ [0,  1]
-            : max(delta / energyCalculator.maxLossPerTick, -1.0)  // ∈ [-1, 0]
+        let dE = nextState.energy - currentState.energy
+        if dE > 0 {
+            r += min(dE / GlobalConstants.rewardEnergyDeltaScale, 0.5)
+        } else if dE < 0 {
+            r += max(dE / GlobalConstants.rewardEnergyLossPenaltyScale, -0.5)
+        }
 
-        // Alpha blend: deltaWeight=0 → pure survival signal, deltaWeight=1 → pure sensation
-        let baseReward = (1.0 - deltaWeight) * absolute + deltaWeight * normalizedDelta
+        if nextState.energy < GlobalConstants.rewardCriticalEnergyThreshold {
+            r -= (GlobalConstants.rewardCriticalEnergyThreshold - nextState.energy) / GlobalConstants.rewardEnergyDeltaScale
+        } else if nextState.energy < GlobalConstants.rewardWarningEnergyThreshold {
+            r -= (GlobalConstants.rewardWarningEnergyThreshold - nextState.energy) / GlobalConstants.rewardWarningPenaltyScale
+        }
 
-        // Explicit attack penalty: separate signal so the network learns predation ≠ hunger.
-        return currentState.wasAttacked ? baseReward + attackPenalty : baseReward
+        return clamp(r, -1.0, 1.0)
     }
+}
+
+private func clamp<T: Comparable>(_ value: T, _ lower: T, _ upper: T) -> T {
+    min(max(value, lower), upper)
 }
 
 private func zip3<A, B, C>(_ a: [A], _ b: [B], _ c: [C]) -> [(A, B, C)] {

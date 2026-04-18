@@ -29,31 +29,30 @@ actor OrganismModel: Equatable {
     let id = UUID()
     let name: String
     private(set) var direction: Direction = .left
-    
-    var actionPublisher: AsyncStream<Action> {
-        AsyncStream { continuation in
-            self.actionContinuation = continuation
-        }
-    }
+
+    // actionPublisher is stored — Organism subscribes once at init and must not lose the stream.
+    let actionPublisher: AsyncStream<Action>
+
+    // inputsPublisher is computed — recreated each time OrganismPopover opens,
+    // immediately replaying lastInput so the view has data before the next tick.
     var inputsPublisher: AsyncStream<OrganismState> {
         AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
-            self.inputsContinuation = continuation
-            if let lastInput {
-                continuation.yield(lastInput)
-            }
+            guard !isDead else { continuation.finish(); return }
+            inputsContinuation = continuation
+            if let lastInput { continuation.yield(lastInput) }
         }
     }
-    
+
     // Private State
-    
+
     @Published private(set) var energy = GlobalConstants.maxEnergy
-    private var isBusy = false
     private var lastInput: OrganismState? = nil
     private(set) var isDead: Bool = false
     private var wasAttackedThisTick: Bool = false
-    
+    private var isProcessingAction: Bool = false
+
     // Triggers
-    
+
     private var actionContinuation: AsyncStream<Action>.Continuation?
     private var inputsContinuation: AsyncStream<OrganismState>.Continuation?
     
@@ -75,12 +74,19 @@ actor OrganismModel: Equatable {
         tracker: OrganismTracker,
         onDeath: @escaping @MainActor @Sendable (OrganismModel, CauseOfDeath) -> Void
     ) {
+        // Create streams once. AsyncStream calls the closure synchronously,
+        // so continuations are set before any other code runs.
+        var aCont: AsyncStream<Action>.Continuation!
+        self.actionPublisher = AsyncStream(Action.self, bufferingPolicy: .bufferingNewest(1)) { aCont = $0 }
+
+        self.actionContinuation = aCont
+
         self.brain = brain
         self.name = name
         self.logger = logger
         self.tracker = tracker
         self.onDeath = onDeath
-        
+
         Task {
             await observeEnergyChanges()
         }
@@ -90,18 +96,18 @@ actor OrganismModel: Equatable {
     func handleChanges(lightLevel: Double, depth: Double, dayProgress: Double) async {
         if isDead { return }
 
-        isBusy = true
+        // Apply idle loss and light gain atomically — only the final value is published
+        // to $energy, so observeEnergyChanges sees the real outcome, not a transient negative.
+        let lightGain = energyCalculator.energyGain(fromLightLevel: lightLevel)
+        energy = min(energy - GlobalConstants.idleEnergyLoss + lightGain, GlobalConstants.maxEnergy)
 
-        // Capture energy before this tick's changes
-        let energySnapshot = energy
-        energy -= GlobalConstants.idleEnergyLoss
-        gainEnergy(fromLightLevel: lightLevel)
-
+        // Use post-passive energy so the brain sees a state consistent with lightLevel:
+        // lightLevel and energy both reflect the same tick.
         let state = OrganismState(
             lightLevel: lightLevel,
             depth: depth,
             dayProgress: dayProgress,
-            energy: energySnapshot,
+            energy: energy,
             wasAttacked: wasAttackedThisTick
         )
         wasAttackedThisTick = false
@@ -109,10 +115,6 @@ actor OrganismModel: Equatable {
         lastInput = state
         inputsContinuation?.yield(state)
         await calculateNextAction(input: state)
-    }
-    
-    func setIsBusy(_ busy: Bool) {
-        isBusy = busy
     }
     
     func applyDamage(_ amount: Double) {
@@ -124,12 +126,13 @@ actor OrganismModel: Equatable {
     func kill() {
         if isDead { return }
         isDead = true
-        // Set energy to 0 before reporting, without triggering another step
         energy = 0
+        finishStreams()
         Task { @MainActor in
             await brain.reportDeath()
             onDeath(self, .predation)
-            await tracker.reportGatheredStatistics(forName: name)
+            let lifespan = await tracker.reportGatheredStatistics(forName: name)
+            QLearningStore.shared.recordLifespan(days: lifespan)
         }
     }
 
@@ -144,6 +147,7 @@ actor OrganismModel: Equatable {
             if energyValue <= 0 {
                 if !isDead {
                     isDead = true
+                    finishStreams()
                     await brain.reportDeath()
                     await onDeath(self, .energyDepletion)
                     await tracker.reportGatheredStatistics(forName: name)
@@ -153,15 +157,25 @@ actor OrganismModel: Equatable {
         }
     }
     
+    private func finishStreams() {
+        actionContinuation?.finish()
+        actionContinuation = nil
+        inputsContinuation?.finish()
+        inputsContinuation = nil
+    }
+
     private func calculateNextAction(input: OrganismState) async {
         let action: Action = await brain.calculateResponse(on: input)
-   
+
+        // Actor is reentrant at suspension points — kill() or applyDamage() may have
+        // run while brain.calculateResponse was awaiting. Guard before any side effects.
+        guard !isDead else { return }
+
         if action != .wait {
             direction = direction == .left ? .right : .left
         }
-            
+
         actionContinuation?.yield(action)
-        
         spentEnergy(by: action)
         
         Task {
@@ -178,11 +192,6 @@ actor OrganismModel: Equatable {
         }
     }
     
-    private func gainEnergy(fromLightLevel lightLevel: CGFloat) {
-        let gain = energyCalculator.energyGain(fromLightLevel: lightLevel)
-        
-        energy = min(gain + energy, GlobalConstants.maxEnergy)
-    }
 }
 
 extension OrganismModel.Action: CustomDebugStringConvertible {

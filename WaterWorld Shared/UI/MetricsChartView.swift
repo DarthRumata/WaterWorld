@@ -11,6 +11,8 @@ enum MetricTab: String, CaseIterable {
     case reward = "Avg Reward"
     case maxQ = "Avg Max Q"
     case mortality = "Mortality"
+    case nightEnergy = "Night Energy"
+    case qLandscape = "Q-Landscape"
 }
 
 struct MetricsChartView: View {
@@ -56,8 +58,19 @@ struct MetricsChartView: View {
             MortalityChart(
                 hunger: store.dailyHungerDeaths,
                 predation: store.dailyPredatorDeaths,
+                lifespan: store.dailyMedianLifespans,
                 episodeBoundaries: store.episodeBoundaries
             )
+        case .nightEnergy:
+            MetricLineChart(
+                data: store.dailyNightEntryEnergy,
+                label: "Avg Energy",
+                color: .orange,
+                xLabel: "Night",
+                yFormat: "%.1f"
+            )
+        case .qLandscape:
+            QHeatmapView()
         }
     }
 }
@@ -65,6 +78,7 @@ struct MetricsChartView: View {
 private struct MortalityChart: View {
     let hunger: [Int]
     let predation: [Int]
+    let lifespan: [Double]
     let episodeBoundaries: [Int: Int]
 
     private struct Bar: Identifiable {
@@ -74,6 +88,11 @@ private struct MortalityChart: View {
         let cause: String
     }
 
+    private struct LifespanPoint: Identifiable {
+        let id: Int
+        let value: Double // scaled to deaths domain
+    }
+
     private var bars: [Bar] {
         zip(hunger, predation).enumerated().flatMap { i, pair in [
             Bar(id: "h\(i)", day: i, count: pair.0, cause: "Hunger"),
@@ -81,32 +100,61 @@ private struct MortalityChart: View {
         ]}
     }
 
+    private var lifespanPoints: [LifespanPoint] {
+        lifespan.enumerated().map { LifespanPoint(id: $0.offset, value: $0.element) }
+    }
+
+    private var xDomain: ClosedRange<Int> {
+        0...(max(bars.map(\.day).max() ?? 0, lifespanPoints.map(\.id).max() ?? 0))
+    }
+
     var body: some View {
         if hunger.isEmpty {
             VStack { Spacer(); ContentUnavailableView("No data yet", systemImage: "chart.bar.fill"); Spacer() }
         } else {
-            Chart {
-                ForEach(bars) { bar in
-                    BarMark(
-                        x: .value("Day", bar.day),
-                        y: .value("Deaths", bar.count)
-                    )
-                    .foregroundStyle(by: .value("Cause", bar.cause))
+            VStack(spacing: 0) {
+                // Deaths bars
+                Chart {
+                    ForEach(bars) { bar in
+                        BarMark(
+                            x: .value("Day", bar.day),
+                            y: .value("Deaths", bar.count)
+                        )
+                        .foregroundStyle(by: .value("Cause", bar.cause))
+                    }
+                    ForEach(episodeBoundaries.sorted(by: { $0.key < $1.key }), id: \.key) { episode, day in
+                        RuleMark(x: .value("Day", day))
+                            .foregroundStyle(.gray.opacity(0.5))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                            .annotation(position: .top, alignment: .leading) {
+                                Text("Ep \(episode)")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                            }
+                    }
                 }
-                ForEach(episodeBoundaries.sorted(by: { $0.key < $1.key }), id: \.key) { episode, day in
-                    RuleMark(x: .value("Day", day))
-                        .foregroundStyle(.gray.opacity(0.5))
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                        .annotation(position: .top, alignment: .leading) {
-                            Text("Ep \(episode)")
-                                .font(.system(size: 9))
-                                .foregroundStyle(.secondary)
-                        }
+                .chartXScale(domain: xDomain)
+                .chartXAxis(.hidden)
+                .chartYAxisLabel("Deaths")
+                .chartForegroundStyleScale(["Hunger": Color.orange, "Predation": Color.red])
+                .frame(maxWidth: .infinity)
+
+                // Median lifespan line — shared X axis
+                Chart {
+                    ForEach(lifespanPoints) { point in
+                        LineMark(
+                            x: .value("Day", point.id),
+                            y: .value("Lifespan (days)", point.value)
+                        )
+                        .foregroundStyle(.teal)
+                        .interpolationMethod(.catmullRom)
+                    }
                 }
+                .chartXScale(domain: xDomain)
+                .chartXAxisLabel("Day")
+                .chartYAxisLabel("Lifespan (d)")
+                .frame(maxWidth: .infinity, maxHeight: 120)
             }
-            .chartXAxisLabel("Day")
-            .chartYAxisLabel("Deaths")
-            .chartForegroundStyleScale(["Hunger": Color.orange, "Predation": Color.red])
         }
     }
 }

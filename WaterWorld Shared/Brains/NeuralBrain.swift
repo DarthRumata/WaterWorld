@@ -9,7 +9,7 @@ actor NeuralBrain: BrainProtocol {
     var neuralNetwork: NeuralNetwork? {
         network
     }
-    let network = NeuralNetworkBuilder(inputSize: 4)
+    let network = NeuralNetworkBuilder(inputSize: 5)
         .dense(4, activation: .relu)
         .dense(3, activation: .softmax)
         .build(weightInitStrategy: .uniformXavier)

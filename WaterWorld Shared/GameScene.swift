@@ -99,7 +99,6 @@ class GameScene: SKScene {
             batchSize: 128,
             learningRate: 0.01,
             epsilonDecay: 0.995,
-            deltaWeight: 0.05,
             costFunction: costFunctionType.make(),
             networkUpdateHandler: { [weak self] network, epsilon in
                 await self?.propagateNetwork(network, epsilon: epsilon)
@@ -233,11 +232,6 @@ class GameScene: SKScene {
             Task { await self.qLearner.setTau(value) }
             self.hudModel.tau = value
         }
-        hudModel.onSetDeltaWeight = { [weak self] value in
-            guard let self else { return }
-            Task { await self.qLearner.setDeltaWeight(value) }
-            self.hudModel.deltaWeight = value
-        }
         hudModel.onSetLearningRate = { [weak self] value in
             guard let self else { return }
             Task { await self.qLearner.setLearningRate(value) }
@@ -247,6 +241,11 @@ class GameScene: SKScene {
             guard let self else { return }
             Task { await self.qLearner.setEpsilonDecay(value) }
             self.hudModel.epsilonDecay = value
+        }
+        hudModel.onSetDeathPenalty = { [weak self] value in
+            guard let self else { return }
+            Task { await self.qLearner.setDeathPenalty(value) }
+            self.hudModel.deathPenalty = value
         }
         hudModel.onTapMetric = { [weak self] tab in self?.presentMetricsChart(tab: tab) }
         hudModel.onSaveNetwork = { [weak self] in
@@ -269,9 +268,6 @@ class GameScene: SKScene {
             Task {
                 guard let snapshot = try? NeuralNetworkSnapshot.load(from: url) else { return }
                 try? await self.qLearner.applySnapshot(snapshot)
-                let network = await self.qLearner.mainNetwork
-                let epsilon = await self.qLearner.currentEpsilon
-                await self.propagateNetwork(network, epsilon: epsilon)
             }
         }
     }
@@ -397,8 +393,10 @@ class GameScene: SKScene {
         switch simulationMode {
         case .normal:
             simulationMode = .learning
+            Task { await qLearner.setLearningEnabled(true) }
         case .learning:
             simulationMode = .normal
+            Task { await qLearner.setLearningEnabled(false) }
         }
     }
     
@@ -412,13 +410,14 @@ class GameScene: SKScene {
         predationManager.updateIntensity(intensity)
         // Re-plan if currently night
         if dayProgress >= 0.5 {
-            predationManager.ensurePlanIfNight(dayProgress: dayProgress)
+            predationManager.ensurePlanIfNight(dayProgress: dayProgress, populationSize: organismModels.count)
         }
     }
     
     // MARK: State updates
     
     private func gameTick() {
+        let prevDayProgress = dayProgress
         let timeInDay = totalTime.truncatingRemainder(dividingBy: GlobalConstants.dayDuration)
         dayProgress = CGFloat(timeInDay / GlobalConstants.dayDuration)
         lightLevel = environment.baseLightLevel(maxLight: GlobalConstants.maxLightLevel, dayProgress: dayProgress)
@@ -433,12 +432,13 @@ class GameScene: SKScene {
         }
         dayCount = newDayCount
 
-        predationManager.ensurePlanIfNight(dayProgress: dayProgress)
+        predationManager.ensurePlanIfNight(dayProgress: dayProgress, populationSize: organismModels.count)
 
+        let nightJustStarted = prevDayProgress < 0.5 && dayProgress >= 0.5
         isTickRunning = true
-        notificationTask = Task { [weak self] in
+        notificationTask = Task { [weak self, nightJustStarted] in
             guard let self else { return }
-            await self.runTickPass()
+            await self.runTickPass(nightJustStarted: nightJustStarted)
             await MainActor.run { self.isTickRunning = false }
         }
     }
@@ -457,16 +457,27 @@ class GameScene: SKScene {
     }
     
     @MainActor
-    private func runTickPass() async {
-        // Snapshot stable (model, view, depth) pairs up front
-        let pairs: [(model: OrganismModel, view: Organism, depth: CGFloat)] = organismModels.compactMap { (id, model) in
+    private func runTickPass(nightJustStarted: Bool = false) async {
+        // Snapshot stable (model, view, depth) triples up front
+        let snapshot: [(model: OrganismModel, view: Organism, depth: CGFloat)] = organismModels.compactMap { (id, model) in
             guard let view = organisms[id] else { return nil }
             let depth = normalizedDepth(for: view)
             return (model, view, depth)
         }
 
+        if nightJustStarted && !snapshot.isEmpty {
+            var total = 0.0
+            for entry in snapshot { total += await entry.model.energy }
+            QLearningStore.shared.recordNightEntry(avgEnergy: total / Double(snapshot.count))
+        }
+
         // Process due night attacks via PredationManager
-        let events = await predationManager.processDueAttacks(pairs: pairs.map { ($0.view.id, $0.depth) })
+        var predationSnapshot: [(id: UUID, depth: CGFloat, energy: Double)] = []
+        predationSnapshot.reserveCapacity(snapshot.count)
+        for entry in snapshot {
+            predationSnapshot.append((entry.view.id, entry.depth, await entry.model.energy))
+        }
+        let events = await predationManager.processDueAttacks(pairs: predationSnapshot)
 
         // Apply events
         for event in events {
@@ -478,8 +489,8 @@ class GameScene: SKScene {
             }
         }
 
-        // Notify organisms using the original pairs snapshot
-        for (model, view, depth) in pairs {
+        // Notify organisms using the original snapshot
+        for (model, view, depth) in snapshot {
             guard !Task.isCancelled else { return }
             guard organismModels[model.id] != nil, organisms[view.id] != nil else { continue }
 

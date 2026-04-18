@@ -85,32 +85,28 @@ class Organism: SKNode {
         bubble.run(colorChange)
     }
 
-    func moveUp() {
-        Task {
-            await move(by: CGPoint(
-                x: model.direction.rawValue * GlobalConstants.movementPace,
-                y: GlobalConstants.movementPace
-            ))
-        }
+    func moveUp() async {
+        await move(by: CGPoint(
+            x: model.direction.rawValue * GlobalConstants.movementPace,
+            y: GlobalConstants.movementPace
+        ))
     }
 
-    func moveDown() {
-        Task {
-            await move(by: CGPoint(
-                x: model.direction.rawValue * GlobalConstants.movementPace,
-                y: -GlobalConstants.movementPace
-            ))
-        }
+    func moveDown() async {
+        await move(by: CGPoint(
+            x: model.direction.rawValue * GlobalConstants.movementPace,
+            y: -GlobalConstants.movementPace
+        ))
     }
 
     private func listenModel() {
         Task {
-            for await action in await model.actionPublisher {
+            for await action in model.actionPublisher {
                 switch action {
                 case .moveUp:
-                    moveUp()
+                    await moveUp()
                 case .moveDown:
-                    moveDown()
+                    await moveDown()
                 case .wait:
                     await wait()
                 }
@@ -141,14 +137,17 @@ class Organism: SKNode {
         newPosition.y = max(minY, min(newPosition.y, maxY))
 
         if position != newPosition {
-            let moveAction = SKAction.move(to: newPosition, duration: GlobalConstants.gameTickDuration)
-            await run(moveAction)
+            if speed > 3 {
+                position = newPosition
+            } else {
+                let moveAction = SKAction.move(to: newPosition, duration: GlobalConstants.gameTickDuration)
+                await run(moveAction)
+            }
         }
-        await model.setIsBusy(false)
     }
 
     private func wait() async {
+        guard speed <= 3 else { return }
         try? await Task.sleep(for: .seconds(GlobalConstants.gameTickDuration / speed))
-        await model.setIsBusy(false)
     }
 }

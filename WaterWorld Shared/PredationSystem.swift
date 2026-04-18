@@ -3,8 +3,8 @@ import CoreGraphics
 
 actor PredationSystem {
     struct Config: Sendable {
-        var killBudgetFactor: Double // flat kills per night (based on predators)
-        var maxKillsPerNight: Int = 6
+        var populationFraction: Double  // fraction of population attacked per night
+        var minimumAttacksPerNight: Int // floor regardless of population size
         var nightDuration: TimeInterval
         var riskFromDepth: @Sendable (CGFloat) -> Double
     }
@@ -15,9 +15,9 @@ actor PredationSystem {
         self.config = config
     }
 
-    func planNightAttacks() -> [TimeInterval] {
-        let raw = Int(config.killBudgetFactor)
-        let budget = max(0, min(raw, config.maxKillsPerNight))
+    func planNightAttacks(populationSize: Int) -> [TimeInterval] {
+        let scaled = Int((Double(populationSize) * config.populationFraction).rounded())
+        let budget = max(config.minimumAttacksPerNight, scaled)
         guard budget > 0 else { return [] }
 
         // Attack density peaks at midnight and fades toward sunset/dawn.

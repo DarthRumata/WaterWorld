@@ -6,12 +6,23 @@ enum PredatorsIntensity: Int, CaseIterable {
     case medium
     case high
 
-    var factor: Double {
+    /// Fraction of the current population attacked per night.
+    var populationFraction: Double {
         switch self {
-        case .off: return 0.0
-        case .low: return 1.0
-        case .medium: return 3.0
-        case .high: return 6.0
+        case .off:    return 0.0
+        case .low:    return 0.05
+        case .medium: return 0.10
+        case .high:   return 0.20
+        }
+    }
+
+    /// Minimum attacks per night regardless of population size.
+    var minimumAttacksPerNight: Int {
+        switch self {
+        case .off:    return 0
+        case .low:    return 1
+        case .medium: return 3
+        case .high:   return 5
         }
     }
 }

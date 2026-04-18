@@ -28,10 +28,17 @@ final class QLearningStore {
     /// Day index at which each episode started, keyed by episode number.
     private(set) var episodeBoundaries: [Int: Int] = [:]
 
+    private(set) var dailyMedianLifespans: [Double] = []
+    private var currentDayLifespans: [Int] = []
+
+    private(set) var dailyNightEntryEnergy: [Double] = []
+
     // Real-time metrics for UI
     private(set) var lastAvgReward: Double = 0
     private(set) var lastAvgMaxQ: Double = 0
     private(set) var learningWarnings: [LearningWarning] = []
+    private(set) var currentNetwork: NeuralNetwork?
+    private(set) var networkUpdateCount: Int = 0
 
     func append(_ step: QLearningExperience) {
         steps.append(step)
@@ -53,6 +60,11 @@ final class QLearningStore {
         learningWarnings = warnings
     }
 
+    func updateCurrentNetwork(_ network: NeuralNetwork) {
+        currentNetwork = network
+        networkUpdateCount += 1
+    }
+
     func appendMaxQTrend(_ avgMaxQ: Double) {
         batchMaxQs.append(avgMaxQ)
         lastAvgMaxQ = avgMaxQ
@@ -69,11 +81,24 @@ final class QLearningStore {
         }
     }
 
+    func recordLifespan(days: Int) {
+        currentDayLifespans.append(days)
+    }
+
+    func recordNightEntry(avgEnergy: Double) {
+        dailyNightEntryEnergy.append(avgEnergy)
+    }
+
     func advanceDay(to day: Int) {
         dailyHungerDeaths.append(currentDayHungerDeaths)
         dailyPredatorDeaths.append(currentDayPredatorDeaths)
         currentDayHungerDeaths = 0
         currentDayPredatorDeaths = 0
+
+        let median = medianLifespan(currentDayLifespans)
+        dailyMedianLifespans.append(median)
+        currentDayLifespans.removeAll()
+
         currentDay = day
     }
 
@@ -88,6 +113,25 @@ final class QLearningStore {
         dailyPredatorDeaths.removeAll()
         currentDayHungerDeaths = 0
         currentDayPredatorDeaths = 0
+        dailyMedianLifespans.removeAll()
+        currentDayLifespans.removeAll()
+        dailyNightEntryEnergy.removeAll()
+        currentDay = 0
         episodeBoundaries.removeAll()
+        lastLoss = 0
+        lastAvgReward = 0
+        lastAvgMaxQ = 0
+        learningWarnings = []
+        currentNetwork = nil
+        networkUpdateCount = 0
+    }
+
+    private func medianLifespan(_ values: [Int]) -> Double {
+        guard !values.isEmpty else { return 0 }
+        let sorted = values.sorted()
+        let mid = sorted.count / 2
+        return sorted.count.isMultiple(of: 2)
+            ? Double(sorted[mid - 1] + sorted[mid]) / 2.0
+            : Double(sorted[mid])
     }
 }

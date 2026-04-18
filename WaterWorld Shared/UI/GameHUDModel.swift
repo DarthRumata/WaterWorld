@@ -27,7 +27,8 @@ final class GameHUDModel {
     var tau: Double = 0.005
     var learningRate: Double = 0.01
     var epsilonDecay: Double = 0.995
-    var deltaWeight: Double = 0.05
+    // MARK: - Reward params
+    var deathPenalty: Double = -1.0
 
     // MARK: - Actions
     var onRestart: () -> Void = {}
@@ -42,7 +43,7 @@ final class GameHUDModel {
     var onSetTau: (Double) -> Void = { _ in }
     var onSetLearningRate: (Double) -> Void = { _ in }
     var onSetEpsilonDecay: (Double) -> Void = { _ in }
-    var onSetDeltaWeight: (Double) -> Void = { _ in }
+    var onSetDeathPenalty: (Double) -> Void = { _ in }
     var onTapMetric: (MetricTab) -> Void = { _ in }
     var onSaveNetwork: () -> Void = {}
     var onLoadNetwork: () -> Void = {}
