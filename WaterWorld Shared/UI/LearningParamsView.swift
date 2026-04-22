@@ -39,7 +39,7 @@ struct ParamRowView: View {
         HStack(spacing: 4) {
             Text(symbol)
                 .frame(width: labelWidth, alignment: .leading)
-                .foregroundStyle(Color(white: 0.4))
+                .foregroundStyle(.primary)
             Button("-") { decrement() }.buttonStyle(HUDButtonStyle())
             TextField("", text: $text)
                 .focused($isFocused)
@@ -47,6 +47,7 @@ struct ParamRowView: View {
                 .frame(width: 52)
                 .textFieldStyle(.plain)
                 .onSubmit { commit() }
+                .onChange(of: isFocused) { _, focused in if !focused { commit() } }
                 .onChange(of: value) { _, newValue in
                     if !isFocused {
                         text = String(format: format, newValue)
@@ -78,6 +79,8 @@ struct ParamRowView: View {
 struct LearningParamsView: View {
     let hud: GameHUDModel
     @State private var showRewardSettings = false
+    @State private var showSimulationSettings = false
+    @State private var showAdamSettings = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -89,11 +92,23 @@ struct LearningParamsView: View {
                          hint: "Learning rate — размер шага обновления весов.\nМало = медленно, много = нестабильно.")
             ParamRowView(symbol: "εd", value: hud.epsilonDecay, format: "%.4f",  step: 0.001, minValue: 0.99,   onSet: hud.onSetEpsilonDecay,
                          hint: "Epsilon decay — скорость перехода exploration → exploitation.\n0.999 = медленно, 0.99 = быстро.")
-            Button("Reward…") { showRewardSettings = true }
-                .buttonStyle(HUDButtonStyle())
-                .popover(isPresented: $showRewardSettings) {
-                    RewardSettingsView(hud: hud)
-                }
+            HStack(spacing: 8) {
+                Button("Simulation…") { showSimulationSettings = true }
+                    .buttonStyle(HUDButtonStyle())
+                    .popover(isPresented: $showSimulationSettings) {
+                        SimulationSettingsView(hud: hud)
+                    }
+                Button("Reward…") { showRewardSettings = true }
+                    .buttonStyle(HUDButtonStyle())
+                    .popover(isPresented: $showRewardSettings) {
+                        RewardSettingsView(hud: hud)
+                    }
+                Button("Adam…") { showAdamSettings = true }
+                    .buttonStyle(HUDButtonStyle())
+                    .popover(isPresented: $showAdamSettings) {
+                        AdamParamsView(hud: hud)
+                    }
+            }
         }
         .font(.system(size: 12, design: .monospaced))
         .foregroundStyle(Color(white: 0.15))

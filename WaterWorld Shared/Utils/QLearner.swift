@@ -48,6 +48,11 @@ actor QLearner {
     private let diagnosticsMinSteps: Int = 10
     private let diagnosticsStreakThreshold: Int = 3
 
+    private(set) var adamBeta1: Double = 0.9
+    private(set) var adamBeta2: Double = 0.99
+    private(set) var adamEps: Double = 1e-8
+    private(set) var isAdamEnabled: Bool = true
+
     private(set) var isLearningEnabled: Bool = false
 
     private var normalBuffer: [QLearningExperience] = []
@@ -89,6 +94,10 @@ actor QLearner {
     func setDeathPenalty(_ value: Double)  { deathPenalty  = min(0.0,   max(-1.0,  value)) }
     func setLearningRate(_ value: Double) { learningRate = min(0.1,    max(0.0001, value)) }
     func setEpsilonDecay(_ value: Double) { epsilonDecay = min(0.9999, max(0.99,   value)) }
+    func setAdamBeta1(_ value: Double)    { adamBeta1 = min(0.999,  max(0.8,   value)); mainNetwork.resetAdamState() }
+    func setAdamBeta2(_ value: Double)    { adamBeta2 = min(0.9999, max(0.9,   value)); mainNetwork.resetAdamState() }
+    func setAdamEps(_ value: Double)      { adamEps   = min(1e-4,   max(1e-10, value)); mainNetwork.resetAdamState() }
+    func setAdamEnabled(_ enabled: Bool)  { isAdamEnabled = enabled; mainNetwork.resetAdamState() }
     
     func reportExperience(currentState: OrganismState, nextState: OrganismState?, actionIndex: Int) {
         guard isLearningEnabled else { return }
@@ -235,7 +244,7 @@ actor QLearner {
             let grad = costFunction.gradient(prediction: prediction, target: target)
             var error = Array(repeating: 0.0, count: actionCount)
             error[experience.actionIndex] = grad
-            mainNetwork.backward(error: error, inputs: inputs, learningRate: learningRate)
+            mainNetwork.backward(error: error, inputs: inputs, learningRate: learningRate, beta1: adamBeta1, beta2: adamBeta2, eps: adamEps, useAdam: isAdamEnabled)
 
             if isSurprising {
                 if surpriseBuffer.count < maxSurpriseBufferSize {

@@ -69,6 +69,7 @@ enum InitializationStrategy {
 
 struct NeuralNetwork: Sendable {
     var layers: [NeuralLayer]
+    var adamStep: Int = 0
 
     init(inputSize: Int, hiddenLayerSizes: [Int], outputSize: Int, weightInitStrategy: InitializationStrategy) {
         var previousSize = inputSize
@@ -156,6 +157,18 @@ struct NeuralNetwork: Sendable {
 
     /// Polyak averaging: θ_self = τ·θ_main + (1−τ)·θ_self
     /// Applied per-weight every training step for smooth target tracking.
+    mutating func resetAdamState() {
+        adamStep = 0
+        for l in layers.indices {
+            for n in layers[l].neurons.indices {
+                layers[l].neurons[n].m = [Double](repeating: 0, count: layers[l].neurons[n].m.count)
+                layers[l].neurons[n].v = [Double](repeating: 0, count: layers[l].neurons[n].v.count)
+                layers[l].neurons[n].mBias = 0
+                layers[l].neurons[n].vBias = 0
+            }
+        }
+    }
+
     mutating func polyakBlend(toward main: NeuralNetwork, tau: Double) {
         for l in layers.indices {
             for n in layers[l].neurons.indices {
@@ -164,7 +177,8 @@ struct NeuralNetwork: Sendable {
         }
     }
 
-    mutating func backward(error: [Double], inputs: [Double], learningRate: Double) {
+    mutating func backward(error: [Double], inputs: [Double], learningRate: Double, beta1: Double, beta2: Double, eps: Double, useAdam: Bool) {
+        adamStep += 1
         // Forward pass: cache inputs and pre-activation z values per layer
         struct LayerCache {
             let inputs: [Double]
@@ -181,7 +195,7 @@ struct NeuralNetwork: Sendable {
         // Backward pass: reuse cached z values, no redundant computation
         var currentError = error
         for i in (0..<layers.count).reversed() {
-            currentError = layers[i].backward(error: currentError, inputs: caches[i].inputs, zs: caches[i].zs, learningRate: learningRate)
+            currentError = layers[i].backward(error: currentError, inputs: caches[i].inputs, zs: caches[i].zs, learningRate: learningRate, step: adamStep, beta1: beta1, beta2: beta2, eps: eps, useAdam: useAdam)
         }
     }
 }
@@ -224,14 +238,14 @@ struct NeuralLayer: Sendable {
         }
     }
 
-    mutating func backward(error: [Double], inputs: [Double], zs: [Double], learningRate: Double) -> [Double] {
+    mutating func backward(error: [Double], inputs: [Double], zs: [Double], learningRate: Double, step: Int, beta1: Double, beta2: Double, eps: Double, useAdam: Bool) -> [Double] {
         let deltas = computeDeltas(error: error, zs: zs)
         var prevLayerError = [Double](repeating: 0.0, count: neurons[0].weights.count)
         for i in neurons.indices {
             for j in neurons[i].weights.indices {
                 prevLayerError[j] += neurons[i].weights[j] * deltas[i]
             }
-            neurons[i].updateWeights(learningRate: learningRate, delta: deltas[i], inputs: inputs)
+            neurons[i].updateWeights(learningRate: learningRate, delta: deltas[i], inputs: inputs, step: step, beta1: beta1, beta2: beta2, eps: eps, useAdam: useAdam)
         }
         return prevLayerError
     }

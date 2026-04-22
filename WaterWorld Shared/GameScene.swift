@@ -97,7 +97,7 @@ class GameScene: SKScene {
             epsilonGreedy: 1.0,
             gamma: 0.99,
             batchSize: 128,
-            learningRate: 0.01,
+            learningRate: 0.001,
             epsilonDecay: 0.995,
             costFunction: costFunctionType.make(),
             networkUpdateHandler: { [weak self] network, epsilon in
@@ -242,12 +242,48 @@ class GameScene: SKScene {
             Task { await self.qLearner.setEpsilonDecay(value) }
             self.hudModel.epsilonDecay = value
         }
+        hudModel.onSetDodgeEnergyRequired = { [weak self] value in
+            GlobalConstants.predationDodgeEnergyRequired = max(0, value)
+            self?.hudModel.dodgeEnergyRequired = GlobalConstants.predationDodgeEnergyRequired
+        }
+        hudModel.onSetDodgeCost = { [weak self] value in
+            GlobalConstants.predationDodgeCost = max(0, value)
+            self?.hudModel.dodgeCost = GlobalConstants.predationDodgeCost
+        }
         hudModel.onSetDeathPenalty = { [weak self] value in
             guard let self else { return }
             Task { await self.qLearner.setDeathPenalty(value) }
             self.hudModel.deathPenalty = value
         }
+        hudModel.onToggleAdam = { [weak self] enabled in
+            guard let self else { return }
+            Task { await self.qLearner.setAdamEnabled(enabled) }
+            self.hudModel.isAdamEnabled = enabled
+        }
+        hudModel.onSetAdamBeta1 = { [weak self] value in
+            guard let self else { return }
+            Task { await self.qLearner.setAdamBeta1(value) }
+            self.hudModel.adamBeta1 = value
+        }
+        hudModel.onSetAdamBeta2 = { [weak self] value in
+            guard let self else { return }
+            Task { await self.qLearner.setAdamBeta2(value) }
+            self.hudModel.adamBeta2 = value
+        }
+        hudModel.onSetAdamEps = { [weak self] value in
+            guard let self else { return }
+            Task { await self.qLearner.setAdamEps(value) }
+            self.hudModel.adamEps = value
+        }
         hudModel.onTapMetric = { [weak self] tab in self?.presentMetricsChart(tab: tab) }
+        QLearningStore.shared.onLifespanMilestone = { [weak self] lifespan in
+            guard let self else { return }
+            Task {
+                await self.pauseSimulation()
+                let snapshot = await self.qLearner.mainNetwork.makeSnapshot()
+                try? NeuralNetworkSnapshot.save(snapshot, named: "neural_network_best.json")
+            }
+        }
         hudModel.onSaveNetwork = { [weak self] in
             guard let self else { return }
             let panel = NSSavePanel()

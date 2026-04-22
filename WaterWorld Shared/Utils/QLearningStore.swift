@@ -33,6 +33,9 @@ final class QLearningStore {
 
     private(set) var dailyNightEntryEnergy: [Double] = []
 
+    var onLifespanMilestone: ((Int) -> Void)?
+    private var autoSavedThisEpisode: Bool = false
+
     // Real-time metrics for UI
     private(set) var lastAvgReward: Double = 0
     private(set) var lastAvgMaxQ: Double = 0
@@ -83,6 +86,10 @@ final class QLearningStore {
 
     func recordLifespan(days: Int) {
         currentDayLifespans.append(days)
+        if !autoSavedThisEpisode, days >= GlobalConstants.autoSaveLifespanThreshold {
+            autoSavedThisEpisode = true
+            onLifespanMilestone?(days)
+        }
     }
 
     func recordNightEntry(avgEnergy: Double) {
@@ -124,6 +131,7 @@ final class QLearningStore {
         learningWarnings = []
         currentNetwork = nil
         networkUpdateCount = 0
+        autoSavedThisEpisode = false
     }
 
     private func medianLifespan(_ values: [Int]) -> Double {

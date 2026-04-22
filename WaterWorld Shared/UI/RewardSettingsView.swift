@@ -22,7 +22,7 @@ struct RewardSettingsView: View {
         }
         .padding()
         .font(.system(size: 12, design: .monospaced))
-        .foregroundStyle(Color(white: 0.15))
+        .foregroundStyle(.primary)
         .frame(width: 320)
     }
 }

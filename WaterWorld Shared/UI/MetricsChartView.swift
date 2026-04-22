@@ -139,15 +139,14 @@ private struct MortalityChart: View {
                 .chartForegroundStyleScale(["Hunger": Color.orange, "Predation": Color.red])
                 .frame(maxWidth: .infinity)
 
-                // Median lifespan line — shared X axis
+                // Median lifespan bars — shared X axis
                 Chart {
                     ForEach(lifespanPoints) { point in
-                        LineMark(
+                        BarMark(
                             x: .value("Day", point.id),
                             y: .value("Lifespan (days)", point.value)
                         )
-                        .foregroundStyle(.teal)
-                        .interpolationMethod(.catmullRom)
+                        .foregroundStyle(Color.teal)
                     }
                 }
                 .chartXScale(domain: xDomain)
