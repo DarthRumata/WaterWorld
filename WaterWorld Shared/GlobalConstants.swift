@@ -28,8 +28,8 @@ enum GlobalConstants {
     // Alias used by reward shaping — computed so it tracks predationDodgeEnergyRequired
     static var predationDeathThreshold: Double { predationDodgeEnergyRequired }
 
-    // Movement
-    static let movementPace: CGFloat = 824 / 25
+    // Movement — fraction of container height per tick, so 25 ticks always = full traversal
+    static let movementPaceFraction: CGFloat = 1.0 / 25
 
     // Auto-save
     static let autoSaveLifespanThreshold: Int = 100

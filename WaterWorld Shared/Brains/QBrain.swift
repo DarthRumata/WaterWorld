@@ -5,11 +5,14 @@
 //  Created by Stas Kirichok on 9/30/25.
 //
 
-typealias ExperienceReporter = @Sendable (OrganismState, OrganismState?, Int) async -> Void
+import Foundation
+
+typealias ExperienceReporter = @Sendable (UUID, OrganismState, OrganismState?, Int) async -> Void
 
 actor QBrain: BrainProtocol {
     var neuralNetwork: NeuralNetwork? { nil }
 
+    let brainId: UUID = UUID()
     private let reportExperience: ExperienceReporter
     private let agentPolicy: AgentPolicy
     private var previousState: (OrganismState, Int)?
@@ -26,7 +29,7 @@ actor QBrain: BrainProtocol {
         )
 
         if let previousState {
-            await reportExperience(previousState.0, input, previousState.1)
+            await reportExperience(brainId, previousState.0, input, previousState.1)
         }
 
         previousState = (input, actionIndex)
@@ -35,7 +38,7 @@ actor QBrain: BrainProtocol {
 
     func reportDeath() async {
         if let previousState {
-            await reportExperience(previousState.0, nil, previousState.1)
+            await reportExperience(brainId, previousState.0, nil, previousState.1)
             self.previousState = nil
         }
     }

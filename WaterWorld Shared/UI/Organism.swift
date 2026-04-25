@@ -86,17 +86,13 @@ class Organism: SKNode {
     }
 
     func moveUp() async {
-        await move(by: CGPoint(
-            x: model.direction.rawValue * GlobalConstants.movementPace,
-            y: GlobalConstants.movementPace
-        ))
+        let pace = (parent?.frame.size.height ?? 0) * GlobalConstants.movementPaceFraction
+        await move(by: CGPoint(x: model.direction.rawValue * pace, y: pace))
     }
 
     func moveDown() async {
-        await move(by: CGPoint(
-            x: model.direction.rawValue * GlobalConstants.movementPace,
-            y: -GlobalConstants.movementPace
-        ))
+        let pace = (parent?.frame.size.height ?? 0) * GlobalConstants.movementPaceFraction
+        await move(by: CGPoint(x: model.direction.rawValue * pace, y: -pace))
     }
 
     private func listenModel() {

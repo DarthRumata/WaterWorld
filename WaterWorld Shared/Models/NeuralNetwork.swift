@@ -169,6 +169,27 @@ struct NeuralNetwork: Sendable {
         }
     }
 
+    /// Divergence of this network from `main` as a percentage of main's weight scale:
+    /// (mean |θ_self - θ_main|) / (mean |θ_main|) * 100.
+    /// Call on the target network before polyakBlend to see accumulated drift.
+    func weightDivergencePercent(from main: NeuralNetwork) -> Double {
+        var diffSum = 0.0
+        var mainAbsSum = 0.0
+        for (l, layer) in layers.enumerated() {
+            for (n, neuron) in layer.neurons.enumerated() {
+                let mainNeuron = main.layers[l].neurons[n]
+                for (j, w) in neuron.weights.enumerated() {
+                    diffSum += abs(w - mainNeuron.weights[j])
+                    mainAbsSum += abs(mainNeuron.weights[j])
+                }
+                diffSum += abs(neuron.bias - mainNeuron.bias)
+                mainAbsSum += abs(mainNeuron.bias)
+            }
+        }
+        guard mainAbsSum > 0 else { return 0 }
+        return diffSum / mainAbsSum * 100
+    }
+
     mutating func polyakBlend(toward main: NeuralNetwork, tau: Double) {
         for l in layers.indices {
             for n in layers[l].neurons.indices {

@@ -21,9 +21,10 @@ struct AdamParamsView: View {
                 ParamRowView(
                     symbol: "β1",
                     value: hud.adamBeta1,
-                    format: "%.3f",
-                    step: 0.01,
-                    minValue: 0.8,
+                    format: HyperparamSpecs.adamBeta1.format,
+                    step: HyperparamSpecs.adamBeta1.step,
+                    minValue: HyperparamSpecs.adamBeta1.minValue,
+                    maxValue: HyperparamSpecs.adamBeta1.maxValue,
                     labelWidth: 24,
                     onSet: hud.onSetAdamBeta1,
                     hint: "First moment decay (momentum). 0.9 = standard."
@@ -31,9 +32,10 @@ struct AdamParamsView: View {
                 ParamRowView(
                     symbol: "β2",
                     value: hud.adamBeta2,
-                    format: "%.4f",
-                    step: 0.01,
-                    minValue: 0.9,
+                    format: HyperparamSpecs.adamBeta2.format,
+                    step: HyperparamSpecs.adamBeta2.step,
+                    minValue: HyperparamSpecs.adamBeta2.minValue,
+                    maxValue: HyperparamSpecs.adamBeta2.maxValue,
                     labelWidth: 24,
                     onSet: hud.onSetAdamBeta2,
                     hint: "Second moment decay. 0.999 = stable, 0.99 = faster adaptation (better for RL)."
@@ -41,9 +43,10 @@ struct AdamParamsView: View {
                 ParamRowView(
                     symbol: "ε",
                     value: hud.adamEps,
-                    format: "%.2e",
-                    step: 1e-8,
-                    minValue: 1e-10,
+                    format: HyperparamSpecs.adamEps.format,
+                    step: HyperparamSpecs.adamEps.step,
+                    minValue: HyperparamSpecs.adamEps.minValue,
+                    maxValue: HyperparamSpecs.adamEps.maxValue,
                     labelWidth: 24,
                     onSet: hud.onSetAdamEps,
                     hint: "Numerical stability constant. Usually 1e-8."

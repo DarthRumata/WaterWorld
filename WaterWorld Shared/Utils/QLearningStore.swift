@@ -21,6 +21,8 @@ final class QLearningStore {
     private(set) var lastLoss: Double = 0
     private(set) var batchRewards: [Double] = []
     private(set) var batchMaxQs: [Double] = []
+    private(set) var batchTargetDivergences: [Double] = []
+    private(set) var batchTrainDurations: [Double] = []
     private(set) var dailyHungerDeaths: [Int] = []
     private(set) var dailyPredatorDeaths: [Int] = []
     private var currentDayHungerDeaths: Int = 0
@@ -34,7 +36,7 @@ final class QLearningStore {
     private(set) var dailyNightEntryEnergy: [Double] = []
 
     var onLifespanMilestone: ((Int) -> Void)?
-    private var autoSavedThisEpisode: Bool = false
+    private(set) var bestAutoSavedLifespan: Int = UserDefaults.standard.integer(forKey: "bestAutoSavedLifespan")
 
     // Real-time metrics for UI
     private(set) var lastAvgReward: Double = 0
@@ -73,6 +75,14 @@ final class QLearningStore {
         lastAvgMaxQ = avgMaxQ
     }
 
+    func appendTargetDivergence(_ d: Double) {
+        batchTargetDivergences.append(d)
+    }
+
+    func appendTrainDuration(_ ms: Double) {
+        batchTrainDurations.append(ms)
+    }
+
     func recordEpisodeBoundary(episode: Int) {
         episodeBoundaries[episode] = dailyHungerDeaths.count
     }
@@ -86,8 +96,9 @@ final class QLearningStore {
 
     func recordLifespan(days: Int) {
         currentDayLifespans.append(days)
-        if !autoSavedThisEpisode, days >= GlobalConstants.autoSaveLifespanThreshold {
-            autoSavedThisEpisode = true
+        if days >= GlobalConstants.autoSaveLifespanThreshold && days > bestAutoSavedLifespan {
+            bestAutoSavedLifespan = days
+            UserDefaults.standard.set(days, forKey: "bestAutoSavedLifespan")
             onLifespanMilestone?(days)
         }
     }
@@ -116,6 +127,8 @@ final class QLearningStore {
         batchDays.removeAll()
         batchRewards.removeAll()
         batchMaxQs.removeAll()
+        batchTargetDivergences.removeAll()
+        batchTrainDurations.removeAll()
         dailyHungerDeaths.removeAll()
         dailyPredatorDeaths.removeAll()
         currentDayHungerDeaths = 0
@@ -131,7 +144,6 @@ final class QLearningStore {
         learningWarnings = []
         currentNetwork = nil
         networkUpdateCount = 0
-        autoSavedThisEpisode = false
     }
 
     private func medianLifespan(_ values: [Int]) -> Double {

@@ -12,6 +12,8 @@ enum MetricTab: String, CaseIterable {
     case maxQ = "Avg Max Q"
     case mortality = "Mortality"
     case nightEnergy = "Night Energy"
+    case targetDrift = "Target Drift"
+    case trainDuration = "Train ms"
     case qLandscape = "Q-Landscape"
 }
 
@@ -67,6 +69,22 @@ struct MetricsChartView: View {
                 label: "Avg Energy",
                 color: .orange,
                 xLabel: "Night",
+                yFormat: "%.1f"
+            )
+        case .targetDrift:
+            MetricLineChart(
+                data: store.batchTargetDivergences,
+                label: "Target Drift %",
+                color: .indigo,
+                xLabel: "Training step",
+                yFormat: "%.2f"
+            )
+        case .trainDuration:
+            MetricLineChart(
+                data: store.batchTrainDurations,
+                label: "Train ms",
+                color: .cyan,
+                xLabel: "Training step",
                 yFormat: "%.1f"
             )
         case .qLandscape:

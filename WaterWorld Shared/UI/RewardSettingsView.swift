@@ -12,9 +12,10 @@ struct RewardSettingsView: View {
             ParamRowView(
                 symbol: "Death penalty",
                 value: hud.deathPenalty,
-                format: "%.1f",
-                step: 0.1,
-                minValue: -1.0,
+                format: HyperparamSpecs.deathPenalty.format,
+                step: HyperparamSpecs.deathPenalty.step,
+                minValue: HyperparamSpecs.deathPenalty.minValue,
+                maxValue: HyperparamSpecs.deathPenalty.maxValue,
                 labelWidth: 120,
                 onSet: hud.onSetDeathPenalty,
                 hint: "Reward on organism death. Range: -1.0...0."

@@ -13,6 +13,7 @@ struct QLearningExperience: Identifiable, Sendable {
     let actionIndex: Int
     let reward: Double
     let nextState: OrganismState?
+    let stepsAhead: Int
 }
 
 actor QLearner {
@@ -25,7 +26,7 @@ actor QLearner {
     }
 
     var mainNetwork = QLearner.makeNetwork()
-    private var targetNetwork = QLearner.makeNetwork()
+    private lazy var targetNetwork: NeuralNetwork = mainNetwork
     
     private let networkUpdateHandler: (@Sendable (NeuralNetwork, Double) async -> Void)?
     private let sustainedWarningHandler: (@Sendable ([LearningWarning]) async -> Void)?
@@ -38,19 +39,19 @@ actor QLearner {
 
     private let maxBufferSize: Int = 550000
     private let maxSurpriseBufferSize: Int = 50000
-    private let trainInterval = 960
+    private let trainInterval = 128
     private let epsilonMin: Double = 0.04
     private(set) var epsilonDecay: Double
     private let surpriseRatio: Double = 0.25
     private var tdStats = SurpriseThresholdTracker()
-    private(set) var deathPenalty: Double = -1.0
-    private(set) var tau: Double = 0.005
+    private(set) var deathPenalty: Double = HyperparamSpecs.deathPenalty.defaultValue
+    private(set) var tau: Double = HyperparamSpecs.tau.defaultValue
     private let diagnosticsMinSteps: Int = 10
     private let diagnosticsStreakThreshold: Int = 3
 
-    private(set) var adamBeta1: Double = 0.9
-    private(set) var adamBeta2: Double = 0.99
-    private(set) var adamEps: Double = 1e-8
+    private(set) var adamBeta1: Double = HyperparamSpecs.adamBeta1.defaultValue
+    private(set) var adamBeta2: Double = HyperparamSpecs.adamBeta2.defaultValue
+    private(set) var adamEps: Double = HyperparamSpecs.adamEps.defaultValue
     private(set) var isAdamEnabled: Bool = true
 
     private(set) var isLearningEnabled: Bool = false
@@ -59,7 +60,10 @@ actor QLearner {
     private var normalBufferIndex: Int = 0
     private var surpriseBuffer: [QLearningExperience] = []
     private var surpriseBufferIndex: Int = 0
-    private var stepsSinceLastTrain = 0
+    private(set) var nStep: Int = 1
+    private var nStepQueues: [UUID: [(state: OrganismState, action: Int, nextState: OrganismState?)]] = [:]
+
+    private var experiencesSinceLastTrain = 0
     private var learningStepsCount = 0
     private var warningStreaks: [String: Int] = [:]
     private var isTraining = false
@@ -89,30 +93,55 @@ actor QLearner {
     func setLearningEnabled(_ enabled: Bool) { isLearningEnabled = enabled }
 
     func setCostFunction(_ type: CostFunctionType) { costFunction = type.make() }
-    func setGamma(_ value: Double)        { gamma        = min(0.999,  max(0.01,   value)) }
-    func setTau(_ value: Double)          { tau          = min(0.1,    max(0.001,  value)) }
-    func setDeathPenalty(_ value: Double)  { deathPenalty  = min(0.0,   max(-1.0,  value)) }
-    func setLearningRate(_ value: Double) { learningRate = min(0.1,    max(0.0001, value)) }
-    func setEpsilonDecay(_ value: Double) { epsilonDecay = min(0.9999, max(0.99,   value)) }
-    func setAdamBeta1(_ value: Double)    { adamBeta1 = min(0.999,  max(0.8,   value)); mainNetwork.resetAdamState() }
-    func setAdamBeta2(_ value: Double)    { adamBeta2 = min(0.9999, max(0.9,   value)); mainNetwork.resetAdamState() }
-    func setAdamEps(_ value: Double)      { adamEps   = min(1e-4,   max(1e-10, value)); mainNetwork.resetAdamState() }
+    func setGamma(_ value: Double)        { gamma        = HyperparamSpecs.gamma.clamped(value) }
+    func setTau(_ value: Double)          { tau          = HyperparamSpecs.tau.clamped(value) }
+    func setDeathPenalty(_ value: Double) { deathPenalty = HyperparamSpecs.deathPenalty.clamped(value) }
+    func setLearningRate(_ value: Double) { learningRate = HyperparamSpecs.learningRate.clamped(value) }
+    func setEpsilonDecay(_ value: Double) { epsilonDecay = HyperparamSpecs.epsilonDecay.clamped(value) }
+    func setAdamBeta1(_ value: Double)    { adamBeta1 = HyperparamSpecs.adamBeta1.clamped(value); mainNetwork.resetAdamState() }
+    func setAdamBeta2(_ value: Double)    { adamBeta2 = HyperparamSpecs.adamBeta2.clamped(value); mainNetwork.resetAdamState() }
+    func setAdamEps(_ value: Double)      { adamEps   = HyperparamSpecs.adamEps.clamped(value);   mainNetwork.resetAdamState() }
     func setAdamEnabled(_ enabled: Bool)  { isAdamEnabled = enabled; mainNetwork.resetAdamState() }
-    
-    func reportExperience(currentState: OrganismState, nextState: OrganismState?, actionIndex: Int) {
+    func setNStep(_ value: Int)           { nStep = max(1, min(20, value)); nStepQueues.removeAll() }
+
+    func reportExperience(brainId: UUID, currentState: OrganismState, nextState: OrganismState?, actionIndex: Int) {
         guard isLearningEnabled else { return }
-        let reward = calculateReward(currentState: currentState, nextState: nextState)
+
+        nStepQueues[brainId, default: []].append((state: currentState, action: actionIndex, nextState: nextState))
+        let queue = nStepQueues[brainId]!
+
+        if nextState != nil {
+            if queue.count >= nStep {
+                emitExperience(from: queue, start: 0, end: nStep - 1)
+                nStepQueues[brainId]!.removeFirst()
+            }
+        } else {
+            for i in 0..<queue.count {
+                emitExperience(from: queue, start: i, end: queue.count - 1)
+            }
+            nStepQueues.removeValue(forKey: brainId)
+        }
+
+    }
+
+    private func emitExperience(
+        from queue: [(state: OrganismState, action: Int, nextState: OrganismState?)],
+        start: Int, end: Int
+    ) {
+        var acc = 0.0
+        var g = 1.0
+        for i in start...end {
+            acc += g * calculateReward(currentState: queue[i].state, nextState: queue[i].nextState)
+            g *= gamma
+        }
         let experience = QLearningExperience(
-            state: currentState,
-            actionIndex: actionIndex,
-            reward: reward,
-            nextState: nextState
+            state: queue[start].state,
+            actionIndex: queue[start].action,
+            reward: acc,
+            nextState: queue[end].nextState,
+            stepsAhead: end - start + 1
         )
-		
-		Task {
-			await QLearningStore.shared.append(experience)
-		}
-        
+        Task { @MainActor in QLearningStore.shared.append(experience) }
         if normalBuffer.count < maxBufferSize {
             normalBuffer.append(experience)
         } else {
@@ -121,15 +150,11 @@ actor QLearner {
         }
 
         guard !isTraining else { return }
-
-        stepsSinceLastTrain += 1
-
-        if normalBuffer.count >= batchSize && stepsSinceLastTrain >= trainInterval {
-            stepsSinceLastTrain = 0
+        experiencesSinceLastTrain += 1
+        if normalBuffer.count >= batchSize && experiencesSinceLastTrain >= trainInterval {
+            experiencesSinceLastTrain = 0
             isTraining = true
-            Task { [weak self] in
-                await self?.trainOnMiniBatch()
-            }
+            Task { [weak self] in await self?.trainOnMiniBatch() }
         }
     }
 	
@@ -151,6 +176,7 @@ actor QLearner {
     // MARK: - Learning
 	
 	private func trainOnMiniBatch() async {
+        let start = Date.now
 		let wantedSurprise = Int(Double(batchSize) * surpriseRatio)
 		let actualSurprise = min(wantedSurprise, surpriseBuffer.count)
 		let normalCount = batchSize - actualSurprise
@@ -164,7 +190,9 @@ actor QLearner {
 		}
 
 		learn(from: batch)
+        let ms = Date.now.timeIntervalSince(start) * 1000
         isTraining = false
+        Task { @MainActor in QLearningStore.shared.appendTrainDuration(ms) }
 	}
 
     private func learn(from batch: [QLearningExperience]) {
@@ -177,8 +205,8 @@ actor QLearner {
 
         learningStepsCount += 1
         epsilonGreedy = max(epsilonMin, epsilonGreedy * epsilonDecay)
-        // Soft update: target slowly tracks main (τ=0.005 ≈ 0.5% per step).
-        // Keeps training stable — no sudden weight jumps unlike hard copy every N steps.
+
+        let targetDivergence = targetNetwork.weightDivergencePercent(from: mainNetwork)
         targetNetwork.polyakBlend(toward: mainNetwork, tau: tau)
 
         let eps = epsilonGreedy
@@ -193,6 +221,7 @@ actor QLearner {
             QLearningStore.shared.appendLoss(mseLoss, epsilon: eps)
             QLearningStore.shared.appendRewardTrend(avgReward)
             QLearningStore.shared.appendMaxQTrend(avgMaxQ)
+            QLearningStore.shared.appendTargetDivergence(targetDivergence)
             QLearningStore.shared.updateLearningWarnings(sustainedWarnings)
             QLearningStore.shared.updateCurrentNetwork(net)
         }
@@ -223,7 +252,7 @@ actor QLearner {
                 let nextMainQ = mainNetwork.predict(inputs: nextState.normalized)
                 let bestAction = nextMainQ.indices.max(by: { nextMainQ[$0] < nextMainQ[$1] }) ?? 0
                 let nextTargetQ = targetNetwork.predict(inputs: nextState.normalized)
-                targets.append(experience.reward + gamma * nextTargetQ[bestAction])
+                targets.append(experience.reward + pow(gamma, Double(experience.stepsAhead)) * nextTargetQ[bestAction])
             } else {
                 targets.append(experience.reward)
             }

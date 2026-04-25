@@ -95,10 +95,10 @@ class GameScene: SKScene {
         
         self.qLearner = QLearner(
             epsilonGreedy: 1.0,
-            gamma: 0.99,
+            gamma: HyperparamSpecs.gamma.defaultValue,
             batchSize: 128,
-            learningRate: 0.001,
-            epsilonDecay: 0.995,
+            learningRate: HyperparamSpecs.learningRate.defaultValue,
+            epsilonDecay: HyperparamSpecs.epsilonDecay.defaultValue,
             costFunction: costFunctionType.make(),
             networkUpdateHandler: { [weak self] network, epsilon in
                 await self?.propagateNetwork(network, epsilon: epsilon)
@@ -275,6 +275,11 @@ class GameScene: SKScene {
             Task { await self.qLearner.setAdamEps(value) }
             self.hudModel.adamEps = value
         }
+        hudModel.onSetNStep = { [weak self] value in
+            guard let self else { return }
+            Task { await self.qLearner.setNStep(value) }
+            self.hudModel.nStep = value
+        }
         hudModel.onTapMetric = { [weak self] tab in self?.presentMetricsChart(tab: tab) }
         QLearningStore.shared.onLifespanMilestone = { [weak self] lifespan in
             guard let self else { return }
@@ -337,8 +342,8 @@ class GameScene: SKScene {
 
             let model = OrganismModel(
                 brain: QBrain(
-                    reportExperience: { [weak self] state, next, action in
-                        await self?.qLearner.reportExperience(currentState: state, nextState: next, actionIndex: action)
+                    reportExperience: { [weak self] brainId, state, next, action in
+                        await self?.qLearner.reportExperience(brainId: brainId, currentState: state, nextState: next, actionIndex: action)
                     },
                     agentPolicy: AgentPolicy(network: network, epsilon: epsilon)
                 ),

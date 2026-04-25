@@ -7,6 +7,7 @@ struct ParamRowView: View {
     let format: String
     let step: Double
     let minValue: Double
+    let maxValue: Double
     let labelWidth: CGFloat
     let onSet: (Double) -> Void
     let hint: String
@@ -20,6 +21,7 @@ struct ParamRowView: View {
         format: String,
         step: Double,
         minValue: Double = -.infinity,
+        maxValue: Double = .infinity,
         labelWidth: CGFloat = 20,
         onSet: @escaping (Double) -> Void,
         hint: String
@@ -29,6 +31,7 @@ struct ParamRowView: View {
         self.format = format
         self.step = step
         self.minValue = minValue
+        self.maxValue = maxValue
         self.labelWidth = labelWidth
         self.onSet = onSet
         self.hint = hint
@@ -53,19 +56,23 @@ struct ParamRowView: View {
                         text = String(format: format, newValue)
                     }
                 }
-            Button("+") { onSet(value + step) }.buttonStyle(HUDButtonStyle())
+            Button("+") { increment() }.buttonStyle(HUDButtonStyle())
         }
         .help(hint)
     }
 
+    private func increment() {
+        let eps = step * 1e-9
+        let next = ceil((value + eps) / step) * step
+        let capped = min(next, maxValue)
+        if capped > value + eps { onSet(capped) }
+    }
+
     private func decrement() {
-        var delta = step
-        while value - delta < minValue && delta > step / 1024 {
-            delta /= 2
-        }
-        if value - delta >= minValue {
-            onSet(value - delta)
-        }
+        let eps = step * 1e-9
+        let prev = floor((value - eps) / step) * step
+        let floored = max(prev, minValue)
+        if floored < value - eps { onSet(floored) }
     }
 
     private func commit() {
@@ -84,14 +91,16 @@ struct LearningParamsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ParamRowView(symbol: "γ",  value: hud.gamma,        format: "%.3f",  step: 0.01,  minValue: 0.01,   onSet: hud.onSetGamma,
+            ParamRowView(symbol: "γ",  value: hud.gamma,         format: HyperparamSpecs.gamma.format,        step: HyperparamSpecs.gamma.step,        minValue: HyperparamSpecs.gamma.minValue,        maxValue: HyperparamSpecs.gamma.maxValue,        onSet: hud.onSetGamma,
                          hint: "Discount factor — насколько будущие награды важны сейчас.\n0.99 = дальновидный, 0.5 = живёт моментом.")
-            ParamRowView(symbol: "τ",  value: hud.tau,          format: "%.4f",  step: 0.001, minValue: 0.001,  onSet: hud.onSetTau,
+            ParamRowView(symbol: "τ",  value: hud.tau,           format: HyperparamSpecs.tau.format,          step: HyperparamSpecs.tau.step,          minValue: HyperparamSpecs.tau.minValue,          maxValue: HyperparamSpecs.tau.maxValue,          onSet: hud.onSetTau,
                          hint: "Polyak averaging — скорость обновления target-сети.\n0.005 = плавное скольжение, 0.1 = быстрая синхронизация.")
-            ParamRowView(symbol: "α",  value: hud.learningRate, format: "%.4f",  step: 0.001, minValue: 0.0001, onSet: hud.onSetLearningRate,
+            ParamRowView(symbol: "α",  value: hud.learningRate,  format: HyperparamSpecs.learningRate.format,  step: HyperparamSpecs.learningRate.step,  minValue: HyperparamSpecs.learningRate.minValue,  maxValue: HyperparamSpecs.learningRate.maxValue,  onSet: hud.onSetLearningRate,
                          hint: "Learning rate — размер шага обновления весов.\nМало = медленно, много = нестабильно.")
-            ParamRowView(symbol: "εd", value: hud.epsilonDecay, format: "%.4f",  step: 0.001, minValue: 0.99,   onSet: hud.onSetEpsilonDecay,
+            ParamRowView(symbol: "εd", value: hud.epsilonDecay,  format: HyperparamSpecs.epsilonDecay.format,  step: HyperparamSpecs.epsilonDecay.step,  minValue: HyperparamSpecs.epsilonDecay.minValue,  maxValue: HyperparamSpecs.epsilonDecay.maxValue,  onSet: hud.onSetEpsilonDecay,
                          hint: "Epsilon decay — скорость перехода exploration → exploitation.\n0.999 = медленно, 0.99 = быстро.")
+            ParamRowView(symbol: "N",  value: Double(hud.nStep), format: HyperparamSpecs.nStep.format,         step: HyperparamSpecs.nStep.step,         minValue: HyperparamSpecs.nStep.minValue,         maxValue: HyperparamSpecs.nStep.maxValue,         onSet: { hud.onSetNStep(max(1, Int($0))) },
+                         hint: "N-step DQN горизонт. N=1 = стандартный DQN, N=10 = агент видит 10 шагов вперёд за одно обновление.")
             HStack(spacing: 8) {
                 Button("Simulation…") { showSimulationSettings = true }
                     .buttonStyle(HUDButtonStyle())

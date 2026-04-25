@@ -23,20 +23,21 @@ final class GameHUDModel {
     var costFunctionType: CostFunctionType = .mse
 
     // MARK: - Learning params
-    var gamma: Double = 0.99
-    var tau: Double = 0.005
-    var learningRate: Double = 0.001
-    var epsilonDecay: Double = 0.995
+    var gamma: Double = HyperparamSpecs.gamma.defaultValue
+    var tau: Double = HyperparamSpecs.tau.defaultValue
+    var learningRate: Double = HyperparamSpecs.learningRate.defaultValue
+    var epsilonDecay: Double = HyperparamSpecs.epsilonDecay.defaultValue
     // MARK: - Adam params
     var isAdamEnabled: Bool = true
-    var adamBeta1: Double = 0.9
-    var adamBeta2: Double = 0.99
-    var adamEps: Double = 1e-8
+    var adamBeta1: Double = HyperparamSpecs.adamBeta1.defaultValue
+    var adamBeta2: Double = HyperparamSpecs.adamBeta2.defaultValue
+    var adamEps: Double = HyperparamSpecs.adamEps.defaultValue
     // MARK: - Simulation params
     var dodgeEnergyRequired: Double = GlobalConstants.predationDodgeEnergyRequired
     var dodgeCost: Double = GlobalConstants.predationDodgeCost
     // MARK: - Reward params
-    var deathPenalty: Double = -1.0
+    var deathPenalty: Double = HyperparamSpecs.deathPenalty.defaultValue
+    var nStep: Int = Int(HyperparamSpecs.nStep.defaultValue)
 
     // MARK: - Actions
     var onRestart: () -> Void = {}
@@ -58,6 +59,7 @@ final class GameHUDModel {
     var onSetAdamBeta1: (Double) -> Void = { _ in }
     var onSetAdamBeta2: (Double) -> Void = { _ in }
     var onSetAdamEps: (Double) -> Void = { _ in }
+    var onSetNStep: (Int) -> Void = { _ in }
     var onTapMetric: (MetricTab) -> Void = { _ in }
     var onSaveNetwork: () -> Void = {}
     var onLoadNetwork: () -> Void = {}

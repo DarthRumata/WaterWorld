@@ -128,29 +128,29 @@ actor OrganismModel: Equatable {
         isDead = true
         energy = 0
         finishStreams()
-        Task { @MainActor in
-            await brain.reportDeath()
-            onDeath(self, .predation)
-            let lifespan = await tracker.reportGatheredStatistics(forName: name)
-            QLearningStore.shared.recordLifespan(days: lifespan)
-        }
+        Task { @MainActor in await self.handleDeath(cause: .predation) }
     }
 
     func updateBrainNetwork(_ network: NeuralNetwork, epsilon: Double) async {
         await brain.updatePolicy(network: network, epsilon: epsilon)
     }
-    
+
     // Private logic
-    
+
+    private func handleDeath(cause: CauseOfDeath) async {
+        await brain.reportDeath()
+        await onDeath(self, cause)
+        let lifespan = await tracker.reportGatheredStatistics(forName: name)
+        QLearningStore.shared.recordLifespan(days: lifespan)
+    }
+
     private func observeEnergyChanges() async {
         for await energyValue in $energy.values {
             if energyValue <= 0 {
                 if !isDead {
                     isDead = true
                     finishStreams()
-                    await brain.reportDeath()
-                    await onDeath(self, .energyDepletion)
-                    await tracker.reportGatheredStatistics(forName: name)
+                    await handleDeath(cause: .energyDepletion)
                 }
                 break
             }
