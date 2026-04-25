@@ -111,10 +111,12 @@ class GameScene: SKScene {
 
     @MainActor
     private func propagateNetwork(_ network: NeuralNetwork, epsilon: Double) async {
+        let effectiveEpsilon = simulationMode == .normal ? 0.0 : epsilon
+        hudModel.epsilon = effectiveEpsilon
         let models = Array(organismModels.values)
         await withTaskGroup(of: Void.self) { group in
             for model in models {
-                group.addTask { await model.updateBrainNetwork(network, epsilon: epsilon) }
+                group.addTask { await model.updateBrainNetwork(network, epsilon: effectiveEpsilon) }
             }
         }
     }
@@ -237,6 +239,15 @@ class GameScene: SKScene {
             Task { await self.qLearner.setLearningRate(value) }
             self.hudModel.learningRate = value
         }
+        hudModel.onSetEpsilon = { [weak self] value in
+            guard let self else { return }
+            Task { await self.qLearner.setEpsilon(value) }
+            Task {
+                let net = await self.qLearner.mainNetwork
+                await self.propagateNetwork(net, epsilon: value)
+            }
+            self.hudModel.epsilon = value
+        }
         hudModel.onSetEpsilonDecay = { [weak self] value in
             guard let self else { return }
             Task { await self.qLearner.setEpsilonDecay(value) }
@@ -325,7 +336,9 @@ class GameScene: SKScene {
     
     private func addOrganisms() async {
         let initialNetwork = await qLearner.mainNetwork
-        let initialEpsilon = await qLearner.currentEpsilon
+        let rawEpsilon = await qLearner.currentEpsilon
+        let initialEpsilon = simulationMode == .normal ? 0.0 : rawEpsilon
+        hudModel.epsilon = initialEpsilon
         spawnOrganisms(network: initialNetwork, epsilon: initialEpsilon)
     }
 
@@ -438,6 +451,11 @@ class GameScene: SKScene {
         case .learning:
             simulationMode = .normal
             Task { await qLearner.setLearningEnabled(false) }
+        }
+        Task {
+            let net = await qLearner.mainNetwork
+            let eps = await qLearner.currentEpsilon
+            await propagateNetwork(net, epsilon: eps)
         }
     }
     

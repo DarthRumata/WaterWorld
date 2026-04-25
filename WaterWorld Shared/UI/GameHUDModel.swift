@@ -23,6 +23,7 @@ final class GameHUDModel {
     var costFunctionType: CostFunctionType = .mse
 
     // MARK: - Learning params
+    var epsilon: Double = 0.0
     var gamma: Double = HyperparamSpecs.gamma.defaultValue
     var tau: Double = HyperparamSpecs.tau.defaultValue
     var learningRate: Double = HyperparamSpecs.learningRate.defaultValue
@@ -51,6 +52,7 @@ final class GameHUDModel {
     var onSetGamma: (Double) -> Void = { _ in }
     var onSetTau: (Double) -> Void = { _ in }
     var onSetLearningRate: (Double) -> Void = { _ in }
+    var onSetEpsilon: (Double) -> Void = { _ in }
     var onSetEpsilonDecay: (Double) -> Void = { _ in }
     var onSetDodgeEnergyRequired: (Double) -> Void = { _ in }
     var onSetDodgeCost: (Double) -> Void = { _ in }

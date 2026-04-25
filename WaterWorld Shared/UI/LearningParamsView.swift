@@ -91,6 +91,8 @@ struct LearningParamsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            ParamRowView(symbol: "ε",  value: hud.epsilon,      format: HyperparamSpecs.epsilon.format,       step: HyperparamSpecs.epsilon.step,       minValue: HyperparamSpecs.epsilon.minValue,       maxValue: HyperparamSpecs.epsilon.maxValue,       onSet: hud.onSetEpsilon,
+                         hint: "Epsilon — вероятность случайного действия (exploration).\n\(String(format: HyperparamSpecs.epsilon.format, HyperparamSpecs.epsilon.minValue)) = почти чистый exploitation, 1.0 = полностью случайный.")
             ParamRowView(symbol: "γ",  value: hud.gamma,         format: HyperparamSpecs.gamma.format,        step: HyperparamSpecs.gamma.step,        minValue: HyperparamSpecs.gamma.minValue,        maxValue: HyperparamSpecs.gamma.maxValue,        onSet: hud.onSetGamma,
                          hint: "Discount factor — насколько будущие награды важны сейчас.\n0.99 = дальновидный, 0.5 = живёт моментом.")
             ParamRowView(symbol: "τ",  value: hud.tau,           format: HyperparamSpecs.tau.format,          step: HyperparamSpecs.tau.step,          minValue: HyperparamSpecs.tau.minValue,          maxValue: HyperparamSpecs.tau.maxValue,          onSet: hud.onSetTau,

@@ -40,7 +40,7 @@ actor QLearner {
     private let maxBufferSize: Int = 550000
     private let maxSurpriseBufferSize: Int = 50000
     private let trainInterval = 128
-    private let epsilonMin: Double = 0.04
+    private let epsilonMin: Double = HyperparamSpecs.epsilon.minValue
     private(set) var epsilonDecay: Double
     private let surpriseRatio: Double = 0.25
     private var tdStats = SurpriseThresholdTracker()
@@ -98,6 +98,7 @@ actor QLearner {
     func setDeathPenalty(_ value: Double) { deathPenalty = HyperparamSpecs.deathPenalty.clamped(value) }
     func setLearningRate(_ value: Double) { learningRate = HyperparamSpecs.learningRate.clamped(value) }
     func setEpsilonDecay(_ value: Double) { epsilonDecay = HyperparamSpecs.epsilonDecay.clamped(value) }
+    func setEpsilon(_ value: Double)      { epsilonGreedy = HyperparamSpecs.epsilon.clamped(value) }
     func setAdamBeta1(_ value: Double)    { adamBeta1 = HyperparamSpecs.adamBeta1.clamped(value); mainNetwork.resetAdamState() }
     func setAdamBeta2(_ value: Double)    { adamBeta2 = HyperparamSpecs.adamBeta2.clamped(value); mainNetwork.resetAdamState() }
     func setAdamEps(_ value: Double)      { adamEps   = HyperparamSpecs.adamEps.clamped(value);   mainNetwork.resetAdamState() }
@@ -165,6 +166,7 @@ actor QLearner {
         mainNetwork = network
         targetNetwork = network
 
+        epsilonGreedy = HyperparamSpecs.epsilon.maxValue
         let net = mainNetwork
         let eps = epsilonGreedy
         Task { await networkUpdateHandler?(net, eps) }

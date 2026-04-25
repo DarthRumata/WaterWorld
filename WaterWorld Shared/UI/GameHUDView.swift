@@ -78,11 +78,13 @@ struct GameHUDView: View {
                     selectedIndex: hud.simulationMode == .normal ? 0 : 1,
                     onSelect: { _ in hud.onToggleMode() }
                 ).frame(width: 160)
-                SegmentedButtons(
-                    options: CostFunctionType.allCases.map(\.rawValue),
-                    selectedIndex: CostFunctionType.allCases.firstIndex(of: hud.costFunctionType) ?? 0,
-                    onSelect: { hud.onSelectCostFunction(CostFunctionType.allCases[$0]) }
-                ).frame(width: 160)
+                if hud.simulationMode == .learning {
+                    SegmentedButtons(
+                        options: CostFunctionType.allCases.map(\.rawValue),
+                        selectedIndex: CostFunctionType.allCases.firstIndex(of: hud.costFunctionType) ?? 0,
+                        onSelect: { hud.onSelectCostFunction(CostFunctionType.allCases[$0]) }
+                    ).frame(width: 160)
+                }
             }
 
             if hud.simulationMode == .learning {

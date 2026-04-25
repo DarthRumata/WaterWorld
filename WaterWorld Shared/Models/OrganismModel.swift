@@ -141,7 +141,7 @@ actor OrganismModel: Equatable {
         await brain.reportDeath()
         await onDeath(self, cause)
         let lifespan = await tracker.reportGatheredStatistics(forName: name)
-        QLearningStore.shared.recordLifespan(days: lifespan)
+        await QLearningStore.shared.recordLifespan(days: lifespan)
     }
 
     private func observeEnergyChanges() async {
