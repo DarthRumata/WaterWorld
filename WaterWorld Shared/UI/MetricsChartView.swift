@@ -8,12 +8,12 @@ import Charts
 
 enum MetricTab: String, CaseIterable {
     case loss = "Loss"
-    case reward = "Avg Reward"
-    case maxQ = "Avg Max Q"
+    case reward = "Reward / Q"
     case mortality = "Mortality"
     case nightEnergy = "Night Energy"
     case targetDrift = "Target Drift"
     case trainDuration = "Train ms"
+    case adamLR = "Adam LR"
     case qLandscape = "Q-Landscape"
 }
 
@@ -49,12 +49,9 @@ struct MetricsChartView: View {
         case .reward:
             MetricLineChart(
                 data: store.batchRewards, label: "Avg Reward", color: .blue,
-                xLabel: "Training step", companion: (store.batchEpsilons, "ε", .purple)
-            )
-        case .maxQ:
-            MetricLineChart(
-                data: store.batchMaxQs, label: "Avg Max Q", color: .green,
-                xLabel: "Training step", companion: (store.batchEpsilons, "ε", .purple)
+                xLabel: "Training step",
+                companion: (store.batchMaxQs, "Avg Max Q", .green),
+                companionAsLine: true
             )
         case .mortality:
             MortalityChart(
@@ -86,6 +83,14 @@ struct MetricsChartView: View {
                 color: .cyan,
                 xLabel: "Training step",
                 yFormat: "%.1f"
+            )
+        case .adamLR:
+            MetricLineChart(
+                data: store.batchAdamLRs,
+                label: "Adam Eff. LR",
+                color: .mint,
+                xLabel: "Training step",
+                yFormat: "%.2e"
             )
         case .qLandscape:
             QHeatmapView()
@@ -183,6 +188,7 @@ private struct MetricLineChart: View {
     let xLabel: String
     var yFormat: String = "%.2f"
     var companion: ([Double], String, Color)? = nil
+    var companionAsLine: Bool = false
 
     @State private var selectedStep: Int?
 
@@ -209,6 +215,13 @@ private struct MetricLineChart: View {
                         LineMark(x: .value(xLabel, point.id), y: .value(label, point.value))
                             .foregroundStyle(color)
                             .interpolationMethod(.catmullRom)
+                    }
+                    if companionAsLine, let (cData, cLabel, cColor) = companion {
+                        ForEach(Array(cData.enumerated()), id: \.offset) { i, val in
+                            LineMark(x: .value(xLabel, i), y: .value(cLabel, val))
+                                .foregroundStyle(cColor)
+                                .interpolationMethod(.catmullRom)
+                        }
                     }
                     if let step = selectedStep, step < points.count {
                         RuleMark(x: .value(xLabel, step))

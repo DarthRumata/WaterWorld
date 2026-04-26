@@ -218,6 +218,9 @@ actor QLearner {
         let sustainedWarnings = diagnoseLearningHealth(batch: batch)
         let avgReward = batch.map { $0.reward }.reduce(0, +) / Double(batch.count)
         let avgMaxQ = maxQSum / Double(batch.count)
+        let adamLR = isAdamEnabled
+            ? mainNetwork.meanEffectiveLR(alpha: learningRate, beta2: adamBeta2, eps: adamEps)
+            : learningRate
 
         Task { @MainActor in
             QLearningStore.shared.appendLoss(mseLoss, epsilon: eps)
@@ -226,6 +229,7 @@ actor QLearner {
             QLearningStore.shared.appendTargetDivergence(targetDivergence)
             QLearningStore.shared.updateLearningWarnings(sustainedWarnings)
             QLearningStore.shared.updateCurrentNetwork(net)
+            QLearningStore.shared.appendAdamLR(adamLR)
         }
         if !sustainedWarnings.isEmpty {
             Task { await self.sustainedWarningHandler?(sustainedWarnings) }

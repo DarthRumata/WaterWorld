@@ -23,6 +23,7 @@ final class QLearningStore {
     private(set) var batchMaxQs: [Double] = []
     private(set) var batchTargetDivergences: [Double] = []
     private(set) var batchTrainDurations: [Double] = []
+    private(set) var batchAdamLRs: [Double] = []
     private(set) var dailyHungerDeaths: [Int] = []
     private(set) var dailyPredatorDeaths: [Int] = []
     private var currentDayHungerDeaths: Int = 0
@@ -83,6 +84,10 @@ final class QLearningStore {
         batchTrainDurations.append(ms)
     }
 
+    func appendAdamLR(_ lr: Double) {
+        batchAdamLRs.append(lr)
+    }
+
     func recordEpisodeBoundary(episode: Int) {
         episodeBoundaries[episode] = dailyHungerDeaths.count
     }
@@ -129,6 +134,7 @@ final class QLearningStore {
         batchMaxQs.removeAll()
         batchTargetDivergences.removeAll()
         batchTrainDurations.removeAll()
+        batchAdamLRs.removeAll()
         dailyHungerDeaths.removeAll()
         dailyPredatorDeaths.removeAll()
         currentDayHungerDeaths = 0

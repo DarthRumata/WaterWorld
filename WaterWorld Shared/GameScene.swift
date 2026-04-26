@@ -241,12 +241,13 @@ class GameScene: SKScene {
         }
         hudModel.onSetEpsilon = { [weak self] value in
             guard let self else { return }
-            Task { await self.qLearner.setEpsilon(value) }
-            Task {
+            self.hudModel.epsilon = value
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.qLearner.setEpsilon(value)
                 let net = await self.qLearner.mainNetwork
                 await self.propagateNetwork(net, epsilon: value)
             }
-            self.hudModel.epsilon = value
         }
         hudModel.onSetEpsilonDecay = { [weak self] value in
             guard let self else { return }
@@ -444,15 +445,10 @@ class GameScene: SKScene {
     }
     
     private func toggleSimulationMode() {
-        switch simulationMode {
-        case .normal:
-            simulationMode = .learning
-            Task { await qLearner.setLearningEnabled(true) }
-        case .learning:
-            simulationMode = .normal
-            Task { await qLearner.setLearningEnabled(false) }
-        }
-        Task {
+        let enabling = simulationMode == .normal
+        simulationMode = enabling ? .learning : .normal
+        Task { @MainActor in
+            await qLearner.setLearningEnabled(enabling)
             let net = await qLearner.mainNetwork
             let eps = await qLearner.currentEpsilon
             await propagateNetwork(net, epsilon: eps)

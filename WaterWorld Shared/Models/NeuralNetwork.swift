@@ -190,6 +190,26 @@ struct NeuralNetwork: Sendable {
         return diffSum / mainAbsSum * 100
     }
 
+    /// Mean effective learning rate across all parameters: α / (√v̂ᵢ + ε), bias-corrected.
+    /// Returns `alpha` when Adam hasn't warmed up yet (adamStep == 0).
+    func meanEffectiveLR(alpha: Double, beta2: Double, eps: Double) -> Double {
+        guard adamStep > 0 else { return alpha }
+        let biasCorrection = 1.0 - pow(beta2, Double(adamStep))
+        var sum = 0.0
+        var count = 0
+        for layer in layers {
+            for neuron in layer.neurons {
+                for v in neuron.v {
+                    sum += alpha / (sqrt(v / biasCorrection) + eps)
+                    count += 1
+                }
+                sum += alpha / (sqrt(neuron.vBias / biasCorrection) + eps)
+                count += 1
+            }
+        }
+        return count > 0 ? sum / Double(count) : alpha
+    }
+
     mutating func polyakBlend(toward main: NeuralNetwork, tau: Double) {
         for l in layers.indices {
             for n in layers[l].neurons.indices {
