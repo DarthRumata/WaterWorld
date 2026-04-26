@@ -28,7 +28,8 @@ actor QLearner {
     var mainNetwork = QLearner.makeNetwork()
     private lazy var targetNetwork: NeuralNetwork = mainNetwork
     
-    private let networkUpdateHandler: (@Sendable (NeuralNetwork, Double) async -> Void)?
+    private let networkUpdateHandler: (@Sendable (Double) async -> Void)?
+    private(set) lazy var agentPolicy: AgentPolicy = AgentPolicy(network: mainNetwork, epsilon: epsilonGreedy)
     private let sustainedWarningHandler: (@Sendable ([LearningWarning]) async -> Void)?
 
     private let batchSize: Int
@@ -75,7 +76,7 @@ actor QLearner {
         learningRate: Double,
         epsilonDecay: Double,
         costFunction: any CostFunction,
-        networkUpdateHandler: (@Sendable (NeuralNetwork, Double) async -> Void)?,
+        networkUpdateHandler: (@Sendable (Double) async -> Void)?,
         sustainedWarningHandler: (@Sendable ([LearningWarning]) async -> Void)?
     ) {
         self.epsilonGreedy = epsilonGreedy
@@ -90,7 +91,11 @@ actor QLearner {
 
     var currentEpsilon: Double { epsilonGreedy }
 
-    func setLearningEnabled(_ enabled: Bool) { isLearningEnabled = enabled }
+    func setLearningEnabled(_ enabled: Bool) async {
+        isLearningEnabled = enabled
+        let eps = enabled ? epsilonGreedy : 0.0
+        await agentPolicy.update(network: mainNetwork, epsilon: eps)
+    }
 
     func setCostFunction(_ type: CostFunctionType) { costFunction = type.make() }
     func setGamma(_ value: Double)        { gamma        = HyperparamSpecs.gamma.clamped(value) }
@@ -98,12 +103,28 @@ actor QLearner {
     func setDeathPenalty(_ value: Double) { deathPenalty = HyperparamSpecs.deathPenalty.clamped(value) }
     func setLearningRate(_ value: Double) { learningRate = HyperparamSpecs.learningRate.clamped(value) }
     func setEpsilonDecay(_ value: Double) { epsilonDecay = HyperparamSpecs.epsilonDecay.clamped(value) }
-    func setEpsilon(_ value: Double)      { epsilonGreedy = HyperparamSpecs.epsilon.clamped(value) }
+    func setEpsilon(_ value: Double) async {
+        epsilonGreedy = HyperparamSpecs.epsilon.clamped(value)
+        await agentPolicy.update(network: mainNetwork, epsilon: epsilonGreedy)
+    }
     func setAdamBeta1(_ value: Double)    { adamBeta1 = HyperparamSpecs.adamBeta1.clamped(value); mainNetwork.resetAdamState() }
     func setAdamBeta2(_ value: Double)    { adamBeta2 = HyperparamSpecs.adamBeta2.clamped(value); mainNetwork.resetAdamState() }
     func setAdamEps(_ value: Double)      { adamEps   = HyperparamSpecs.adamEps.clamped(value);   mainNetwork.resetAdamState() }
     func setAdamEnabled(_ enabled: Bool)  { isAdamEnabled = enabled; mainNetwork.resetAdamState() }
     func setNStep(_ value: Int)           { nStep = max(1, min(20, value)); nStepQueues.removeAll() }
+
+    func makeBrainFactory() -> @Sendable () -> QBrain {
+        let policy = agentPolicy
+        return { [self] in
+            QBrain(
+                reportExperience: { [weak self] (brainId, state, next, action) async in
+                    await self?.reportExperience(brainId: brainId, currentState: state,
+                                                 nextState: next, actionIndex: action)
+                },
+                agentPolicy: policy
+            )
+        }
+    }
 
     func reportExperience(brainId: UUID, currentState: OrganismState, nextState: OrganismState?, actionIndex: Int) {
         guard isLearningEnabled else { return }
@@ -159,20 +180,18 @@ actor QLearner {
         }
     }
 	
-    func applySnapshot(_ snapshot: NeuralNetworkSnapshot) throws {
+    func applySnapshot(_ snapshot: NeuralNetworkSnapshot) async throws {
         guard let network = NeuralNetwork(snapshot: snapshot) else {
             throw CocoaError(.fileReadCorruptFile)
         }
         mainNetwork = network
         targetNetwork = network
-
         epsilonGreedy = HyperparamSpecs.epsilon.maxValue
-        let net = mainNetwork
+        await agentPolicy.update(network: mainNetwork, epsilon: epsilonGreedy)
         let eps = epsilonGreedy
-        Task { await networkUpdateHandler?(net, eps) }
-        Task { @MainActor in
-            QLearningStore.shared.updateCurrentNetwork(net)
-        }
+        let net = mainNetwork
+        Task { await networkUpdateHandler?(eps) }
+        Task { @MainActor in QLearningStore.shared.updateCurrentNetwork(net) }
     }
     
     // MARK: - Learning
@@ -201,7 +220,7 @@ actor QLearner {
         guard !batch.isEmpty else { return }
 
         let (predictedQs, targets, maxQSum) = computeBatchPredictions(batch: batch)
-        let mseLoss = costFunction.loss(predictions: predictedQs, targets: targets)
+        let loss = costFunction.loss(predictions: predictedQs, targets: targets)
 
         applyBackprop(batch: batch, targets: targets)
 
@@ -213,17 +232,18 @@ actor QLearner {
 
         let eps = epsilonGreedy
         let net = mainNetwork
-        Task { await networkUpdateHandler?(net, eps) }
+        Task { await self.agentPolicy.update(network: net, epsilon: eps) }
+        Task { await self.networkUpdateHandler?(eps) }
 
         let sustainedWarnings = diagnoseLearningHealth(batch: batch)
         let avgReward = batch.map { $0.reward }.reduce(0, +) / Double(batch.count)
         let avgMaxQ = maxQSum / Double(batch.count)
         let adamLR = isAdamEnabled
-            ? mainNetwork.meanEffectiveLR(alpha: learningRate, beta2: adamBeta2, eps: adamEps)
-            : learningRate
+            ? mainNetwork.meanWeightStep(alpha: learningRate, beta1: adamBeta1, beta2: adamBeta2, eps: adamEps)
+            : 0.0
 
         Task { @MainActor in
-            QLearningStore.shared.appendLoss(mseLoss, epsilon: eps)
+            QLearningStore.shared.appendLoss(loss, epsilon: eps)
             QLearningStore.shared.appendRewardTrend(avgReward)
             QLearningStore.shared.appendMaxQTrend(avgMaxQ)
             QLearningStore.shared.appendTargetDivergence(targetDivergence)
@@ -320,13 +340,15 @@ actor QLearner {
             r += max(dE / GlobalConstants.rewardEnergyLossPenaltyScale, -0.5)
         }
 
-        if nextState.energy < GlobalConstants.rewardCriticalEnergyThreshold {
-            r -= (GlobalConstants.rewardCriticalEnergyThreshold - nextState.energy) / GlobalConstants.rewardEnergyDeltaScale
-        } else if nextState.energy < GlobalConstants.rewardWarningEnergyThreshold {
-            r -= (GlobalConstants.rewardWarningEnergyThreshold - nextState.energy) / GlobalConstants.rewardWarningPenaltyScale
+        let critical = GlobalConstants.rewardCriticalEnergyThreshold
+        if nextState.energy < critical {
+            r -= (critical - nextState.energy) / GlobalConstants.rewardEnergyDeltaScale
+        } else {
+            let headroom = GlobalConstants.maxEnergy - critical
+            r += (nextState.energy - critical) / headroom * 0.1
         }
 
-        return clamp(r, -1.0, 1.0)
+        return tanh(r)
     }
 }
 

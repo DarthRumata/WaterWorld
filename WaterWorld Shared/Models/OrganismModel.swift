@@ -49,7 +49,6 @@ actor OrganismModel: Equatable {
     private var lastInput: OrganismState? = nil
     private(set) var isDead: Bool = false
     private var wasAttackedThisTick: Bool = false
-    private var isProcessingAction: Bool = false
 
     // Triggers
 
@@ -93,16 +92,12 @@ actor OrganismModel: Equatable {
     }
     
     // Public methods
-    func handleChanges(lightLevel: Double, depth: Double, dayProgress: Double) async {
-        if isDead { return }
 
-        // Apply idle loss and light gain atomically — only the final value is published
-        // to $energy, so observeEnergyChanges sees the real outcome, not a transient negative.
+    // Phase 1 — called in parallel TaskGroup. Returns nil if organism is dead.
+    func prepareNextAction(lightLevel: Double, depth: Double, dayProgress: Double) async -> (state: OrganismState, action: Action)? {
+        if isDead { return nil }
         let lightGain = energyCalculator.energyGain(fromLightLevel: lightLevel)
         energy = min(energy - GlobalConstants.idleEnergyLoss + lightGain, GlobalConstants.maxEnergy)
-
-        // Use post-passive energy so the brain sees a state consistent with lightLevel:
-        // lightLevel and energy both reflect the same tick.
         let state = OrganismState(
             lightLevel: lightLevel,
             depth: depth,
@@ -111,10 +106,20 @@ actor OrganismModel: Equatable {
             wasAttacked: wasAttackedThisTick
         )
         wasAttackedThisTick = false
-
         lastInput = state
         inputsContinuation?.yield(state)
-        await calculateNextAction(input: state)
+        let action = await brain.computeAction(for: state)
+        guard !isDead else { return nil }
+        return (state, action)
+    }
+
+    // Phase 2 — called sequentially after all Phase 1 tasks complete.
+    func applyResult(state: OrganismState, action: Action) async {
+        guard !isDead else { return }
+        if action != .wait { direction = direction == .left ? .right : .left }
+        actionContinuation?.yield(action)
+        spentEnergy(by: action)
+        Task { await tracker.track(action: action, dayProgress: state.dayProgress) }
     }
     
     func applyDamage(_ amount: Double) {
@@ -129,10 +134,6 @@ actor OrganismModel: Equatable {
         energy = 0
         finishStreams()
         Task { @MainActor in await self.handleDeath(cause: .predation) }
-    }
-
-    func updateBrainNetwork(_ network: NeuralNetwork, epsilon: Double) async {
-        await brain.updatePolicy(network: network, epsilon: epsilon)
     }
 
     // Private logic
@@ -164,28 +165,6 @@ actor OrganismModel: Equatable {
         inputsContinuation = nil
     }
 
-    private func calculateNextAction(input: OrganismState) async {
-        let action: Action = await brain.calculateResponse(on: input)
-
-        // Actor is reentrant at suspension points — kill() or applyDamage() may have
-        // run while brain.calculateResponse was awaiting. Guard before any side effects.
-        guard !isDead else { return }
-
-        if action != .wait {
-            direction = direction == .left ? .right : .left
-        }
-
-        actionContinuation?.yield(action)
-        spentEnergy(by: action)
-        
-        Task {
-            await tracker.track(action: action, dayProgress: input.dayProgress)
-//            await logger.log(
-//                message: "t: \(input.dayProgress.formatted()) action: \(action), energy: \(energy)"
-//            )
-        }
-    }
-    
     private func spentEnergy(by action: Action) {
         if action != .wait {
             energy -= GlobalConstants.movementEnergyLoss

@@ -10,8 +10,6 @@ import Foundation
 typealias ExperienceReporter = @Sendable (UUID, OrganismState, OrganismState?, Int) async -> Void
 
 actor QBrain: BrainProtocol {
-    var neuralNetwork: NeuralNetwork? { nil }
-
     let brainId: UUID = UUID()
     private let reportExperience: ExperienceReporter
     private let agentPolicy: AgentPolicy
@@ -22,28 +20,29 @@ actor QBrain: BrainProtocol {
         self.agentPolicy = agentPolicy
     }
 
-    func calculateResponse(on input: OrganismState) async -> OrganismModel.Action {
-        let actionIndex = await agentPolicy.provideActionIndex(
-            for: input.normalized,
-            actionCount: OrganismModel.Action.allCases.count
-        )
+    func computeAction(for state: OrganismState) async -> OrganismModel.Action {
+        let snapshot = await agentPolicy.currentSnapshot()
 
-        if let previousState {
-            await reportExperience(brainId, previousState.0, input, previousState.1)
+        if let prev = previousState {
+            await reportExperience(brainId, prev.0, state, prev.1)
         }
 
-        previousState = (input, actionIndex)
+        let actionIndex: Int
+        if Double.random(in: 0..<1) < snapshot.epsilon {
+            actionIndex = Int.random(in: 0..<OrganismModel.Action.allCases.count)
+        } else {
+            let q = snapshot.network.predict(inputs: state.normalized)
+            actionIndex = q.indices.max(by: { q[$0] < q[$1] }) ?? 0
+        }
+
+        previousState = (state, actionIndex)
         return OrganismModel.Action.allCases[actionIndex]
     }
 
     func reportDeath() async {
-        if let previousState {
-            await reportExperience(brainId, previousState.0, nil, previousState.1)
-            self.previousState = nil
+        if let prev = previousState {
+            await reportExperience(brainId, prev.0, nil, prev.1)
+            previousState = nil
         }
-    }
-
-    func updatePolicy(network: NeuralNetwork, epsilon: Double) async {
-        await agentPolicy.update(network: network, epsilon: epsilon)
     }
 }

@@ -13,7 +13,7 @@ enum MetricTab: String, CaseIterable {
     case nightEnergy = "Night Energy"
     case targetDrift = "Target Drift"
     case trainDuration = "Train ms"
-    case adamLR = "Adam LR"
+    case adamLR = "Step Size"
     case qLandscape = "Q-Landscape"
 }
 
@@ -87,7 +87,7 @@ struct MetricsChartView: View {
         case .adamLR:
             MetricLineChart(
                 data: store.batchAdamLRs,
-                label: "Adam Eff. LR",
+                label: "Step Size",
                 color: .mint,
                 xLabel: "Training step",
                 yFormat: "%.2e"
@@ -201,6 +201,41 @@ private struct MetricLineChart: View {
         data.enumerated().map { Point(id: $0.offset, value: $0.element) }
     }
 
+    @ViewBuilder
+    private var lineChart: some View {
+        let base = Chart {
+            ForEach(points) { point in
+                LineMark(
+                    x: .value(xLabel, point.id),
+                    y: .value("Value", point.value),
+                    series: .value("Series", label)
+                )
+                .foregroundStyle(by: .value("Series", label))
+                .interpolationMethod(.catmullRom)
+            }
+            if companionAsLine, let (cData, cLabel, _) = companion {
+                ForEach(Array(cData.enumerated()), id: \.offset) { i, val in
+                    LineMark(
+                        x: .value(xLabel, i),
+                        y: .value("Value", val),
+                        series: .value("Series", cLabel)
+                    )
+                    .foregroundStyle(by: .value("Series", cLabel))
+                    .interpolationMethod(.catmullRom)
+                }
+            }
+            if let step = selectedStep, step < points.count {
+                RuleMark(x: .value(xLabel, step))
+                    .foregroundStyle(.secondary.opacity(0.5))
+            }
+        }
+        if companionAsLine, let (_, cLabel, cColor) = companion {
+            base.chartForegroundStyleScale(domain: [label, cLabel], range: [color, cColor])
+        } else {
+            base.chartForegroundStyleScale(domain: [label], range: [color])
+        }
+    }
+
     var body: some View {
         if points.isEmpty {
             VStack {
@@ -210,27 +245,10 @@ private struct MetricLineChart: View {
             }
         } else {
             VStack(spacing: 4) {
-                Chart {
-                    ForEach(points) { point in
-                        LineMark(x: .value(xLabel, point.id), y: .value(label, point.value))
-                            .foregroundStyle(color)
-                            .interpolationMethod(.catmullRom)
-                    }
-                    if companionAsLine, let (cData, cLabel, cColor) = companion {
-                        ForEach(Array(cData.enumerated()), id: \.offset) { i, val in
-                            LineMark(x: .value(xLabel, i), y: .value(cLabel, val))
-                                .foregroundStyle(cColor)
-                                .interpolationMethod(.catmullRom)
-                        }
-                    }
-                    if let step = selectedStep, step < points.count {
-                        RuleMark(x: .value(xLabel, step))
-                            .foregroundStyle(.secondary.opacity(0.5))
-                    }
-                }
-                .chartXAxisLabel(xLabel)
-                .chartYAxisLabel(label)
-                .chartXSelection(value: $selectedStep)
+                lineChart
+                    .chartXAxisLabel(xLabel)
+                    .chartYAxisLabel(label)
+                    .chartXSelection(value: $selectedStep)
 
                 // Fixed-height tooltip zone — no layout shift
                 HStack(spacing: 16) {

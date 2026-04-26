@@ -6,7 +6,7 @@
 //
 
 actor RandomBrain: BrainProtocol {
-    func calculateResponse(on input: OrganismState) async -> OrganismModel.Action {
+    func computeAction(for input: OrganismState) async -> OrganismModel.Action {
         let actions: [OrganismModel.Action] = [.moveUp, .moveDown, .wait]
         return actions.randomElement()!
     }

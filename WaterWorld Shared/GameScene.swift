@@ -100,8 +100,11 @@ class GameScene: SKScene {
             learningRate: HyperparamSpecs.learningRate.defaultValue,
             epsilonDecay: HyperparamSpecs.epsilonDecay.defaultValue,
             costFunction: costFunctionType.make(),
-            networkUpdateHandler: { [weak self] network, epsilon in
-                await self?.propagateNetwork(network, epsilon: epsilon)
+            networkUpdateHandler: { [weak self] epsilon in
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    hudModel.epsilon = simulationMode == .normal ? 0.0 : epsilon
+                }
             },
             sustainedWarningHandler: { [weak self] _ in
                 await self?.pauseSimulation()
@@ -109,17 +112,7 @@ class GameScene: SKScene {
         )
     }
 
-    @MainActor
-    private func propagateNetwork(_ network: NeuralNetwork, epsilon: Double) async {
-        let effectiveEpsilon = simulationMode == .normal ? 0.0 : epsilon
-        hudModel.epsilon = effectiveEpsilon
-        let models = Array(organismModels.values)
-        await withTaskGroup(of: Void.self) { group in
-            for model in models {
-                group.addTask { await model.updateBrainNetwork(network, epsilon: effectiveEpsilon) }
-            }
-        }
-    }
+
     
     override func update(_ currentTime: TimeInterval) {
         let rawDelta = currentTime - (lastUpdateTime ?? currentTime)
@@ -245,8 +238,6 @@ class GameScene: SKScene {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.qLearner.setEpsilon(value)
-                let net = await self.qLearner.mainNetwork
-                await self.propagateNetwork(net, epsilon: value)
             }
         }
         hudModel.onSetEpsilonDecay = { [weak self] value in
@@ -335,16 +326,15 @@ class GameScene: SKScene {
         addChild(container)
     }
     
+    @MainActor
     private func addOrganisms() async {
-        let initialNetwork = await qLearner.mainNetwork
-        let rawEpsilon = await qLearner.currentEpsilon
-        let initialEpsilon = simulationMode == .normal ? 0.0 : rawEpsilon
-        hudModel.epsilon = initialEpsilon
-        spawnOrganisms(network: initialNetwork, epsilon: initialEpsilon)
+        await qLearner.setLearningEnabled(simulationMode == .learning)
+        let brainFactory = await qLearner.makeBrainFactory()
+        spawnOrganisms(brainFactory: brainFactory)
     }
 
     @MainActor
-    private func spawnOrganisms(network: NeuralNetwork, epsilon: Double) {
+    private func spawnOrganisms(brainFactory: @Sendable () -> QBrain) {
         for i in 0 ..< GlobalConstants.initialPopulation {
             let xPosition = CGFloat.random(in: 10...container.size.width - 10)
             let yPosition = CGFloat.random(in: 10...container.size.height - 10)
@@ -355,12 +345,7 @@ class GameScene: SKScene {
             let tracker = OrganismTracker(logger: logger)
 
             let model = OrganismModel(
-                brain: QBrain(
-                    reportExperience: { [weak self] brainId, state, next, action in
-                        await self?.qLearner.reportExperience(brainId: brainId, currentState: state, nextState: next, actionIndex: action)
-                    },
-                    agentPolicy: AgentPolicy(network: network, epsilon: epsilon)
-                ),
+                brain: brainFactory(),
                 name: nameGenerator.generateName() ?? "\(i)",
                 logger: logger,
                 tracker: tracker
@@ -449,9 +434,7 @@ class GameScene: SKScene {
         simulationMode = enabling ? .learning : .normal
         Task { @MainActor in
             await qLearner.setLearningEnabled(enabling)
-            let net = await qLearner.mainNetwork
-            let eps = await qLearner.currentEpsilon
-            await propagateNetwork(net, epsilon: eps)
+            hudModel.epsilon = enabling ? await qLearner.currentEpsilon : 0.0
         }
     }
     
@@ -544,14 +527,35 @@ class GameScene: SKScene {
             }
         }
 
-        // Notify organisms using the original snapshot
+        // Phase 1 — pre-compute per-organism inputs on MainActor, then run inference in parallel
+        struct TickEntry: Sendable { let model: OrganismModel; let lightLevel: Double; let depth: Double }
+        var entries: [TickEntry] = []
         for (model, view, depth) in snapshot {
-            guard !Task.isCancelled else { return }
-            guard organismModels[model.id] != nil, organisms[view.id] != nil else { continue }
-
+            if Task.isCancelled { break }
+            guard organismModels[model.id] != nil else { continue }
             view.speed = simulationSpeed
-            let lightLevel = lightLevel(atDepth: depth)
-            await model.handleChanges(lightLevel: lightLevel, depth: depth, dayProgress: dayProgress)
+            entries.append(TickEntry(model: model, lightLevel: lightLevel(atDepth: depth), depth: Double(depth)))
+        }
+        let dp = dayProgress
+
+        var results: [(OrganismModel, OrganismState, OrganismModel.Action)] = []
+        await withTaskGroup(of: (OrganismModel, OrganismState, OrganismModel.Action)?.self) { group in
+            for entry in entries {
+                group.addTask {
+                    guard let r = await entry.model.prepareNextAction(
+                        lightLevel: entry.lightLevel, depth: entry.depth, dayProgress: dp
+                    ) else { return nil }
+                    return (entry.model, r.state, r.action)
+                }
+            }
+            for await r in group { if let r { results.append(r) } }
+        }
+
+        // Phase 2 — apply all actions simultaneously
+        await withTaskGroup(of: Void.self) { group in
+            for (model, state, action) in results {
+                group.addTask { await model.applyResult(state: state, action: action) }
+            }
         }
     }
     

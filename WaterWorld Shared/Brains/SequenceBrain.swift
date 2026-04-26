@@ -12,7 +12,7 @@ actor SequenceBrain: BrainProtocol {
         self.actions = actions
     }
     
-    func calculateResponse(on input: OrganismState) async -> OrganismModel.Action {
+    func computeAction(for input: OrganismState) async -> OrganismModel.Action {
         guard !actions.isEmpty else {
             return .wait
         }

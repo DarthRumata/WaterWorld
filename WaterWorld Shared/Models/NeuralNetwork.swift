@@ -190,24 +190,29 @@ struct NeuralNetwork: Sendable {
         return diffSum / mainAbsSum * 100
     }
 
-    /// Mean effective learning rate across all parameters: α / (√v̂ᵢ + ε), bias-corrected.
-    /// Returns `alpha` when Adam hasn't warmed up yet (adamStep == 0).
-    func meanEffectiveLR(alpha: Double, beta2: Double, eps: Double) -> Double {
-        guard adamStep > 0 else { return alpha }
-        let biasCorrection = 1.0 - pow(beta2, Double(adamStep))
+    /// Mean actual weight step: α · mean(|m̂ᵢ| / (√v̂ᵢ + ε)), bias-corrected.
+    /// Range [0, alpha]. High = gradients consistent, network learning fast. Low = gradients noisy, network stalling.
+    func meanWeightStep(alpha: Double, beta1: Double, beta2: Double, eps: Double) -> Double {
+        guard adamStep > 0 else { return 0 }
+        let bc1 = 1.0 - pow(beta1, Double(adamStep))
+        let bc2 = 1.0 - pow(beta2, Double(adamStep))
         var sum = 0.0
         var count = 0
         for layer in layers {
             for neuron in layer.neurons {
-                for v in neuron.v {
-                    sum += alpha / (sqrt(v / biasCorrection) + eps)
+                for i in neuron.m.indices {
+                    let mHat = neuron.m[i] / bc1
+                    let vHat = max(0, neuron.v[i] / bc2)
+                    sum += abs(mHat) / (sqrt(vHat) + eps)
                     count += 1
                 }
-                sum += alpha / (sqrt(neuron.vBias / biasCorrection) + eps)
+                let mHatBias = neuron.mBias / bc1
+                let vHatBias = max(0, neuron.vBias / bc2)
+                sum += abs(mHatBias) / (sqrt(vHatBias) + eps)
                 count += 1
             }
         }
-        return count > 0 ? sum / Double(count) : alpha
+        return count > 0 ? alpha * sum / Double(count) : 0
     }
 
     mutating func polyakBlend(toward main: NeuralNetwork, tau: Double) {

@@ -6,12 +6,10 @@
 //
 
 protocol BrainProtocol: Actor {
-    func calculateResponse(on input: OrganismState) async -> OrganismModel.Action
+    func computeAction(for state: OrganismState) async -> OrganismModel.Action
     func reportDeath() async
-    func updatePolicy(network: NeuralNetwork, epsilon: Double) async
 }
 
 extension BrainProtocol {
     func reportDeath() async {}
-    func updatePolicy(network: NeuralNetwork, epsilon: Double) async {}
 }
