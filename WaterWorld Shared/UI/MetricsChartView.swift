@@ -51,7 +51,15 @@ struct MetricsChartView: View {
                 data: store.batchRewards, label: "Avg Reward", color: .blue,
                 xLabel: "Training step",
                 companion: (store.batchMaxQs, "Avg Max Q", .green),
-                companionAsLine: true
+                companionAsLine: true,
+                references: [
+                    (value: store.rewardRefMax, label: "R_max", color: .blue),
+                    (value: store.rewardRefMin, label: "R_min", color: .blue)
+                ],
+                textReferences: [
+                    (label: "Q_max", value: store.qRefMax, color: .green),
+                    (label: "Q_min", value: store.qRefMin, color: .green)
+                ]
             )
         case .mortality:
             MortalityChart(
@@ -189,16 +197,34 @@ private struct MetricLineChart: View {
     var yFormat: String = "%.2f"
     var companion: ([Double], String, Color)? = nil
     var companionAsLine: Bool = false
+    var references: [(value: Double, label: String, color: Color)] = []
+    var textReferences: [(label: String, value: Double, color: Color)] = []
 
     @State private var selectedStep: Int?
+
+    private static let maxRenderPoints = 1000
 
     private struct Point: Identifiable {
         let id: Int
         let value: Double
     }
 
+    private func downsample(_ source: [Double]) -> [Double] {
+        guard source.count > Self.maxRenderPoints else { return source }
+        let factor = (source.count + Self.maxRenderPoints - 1) / Self.maxRenderPoints
+        return stride(from: 0, to: source.count, by: factor).map { start in
+            let end = min(start + factor, source.count)
+            return source[start..<end].reduce(0, +) / Double(end - start)
+        }
+    }
+
     private var points: [Point] {
-        data.enumerated().map { Point(id: $0.offset, value: $0.element) }
+        downsample(data).enumerated().map { Point(id: $0.offset, value: $0.element) }
+    }
+
+    private var downsampledCompanion: ([Double], String, Color)? {
+        guard let (cData, cLabel, cColor) = companion else { return nil }
+        return (downsample(cData), cLabel, cColor)
     }
 
     @ViewBuilder
@@ -213,7 +239,7 @@ private struct MetricLineChart: View {
                 .foregroundStyle(by: .value("Series", label))
                 .interpolationMethod(.catmullRom)
             }
-            if companionAsLine, let (cData, cLabel, _) = companion {
+            if companionAsLine, let (cData, cLabel, _) = downsampledCompanion {
                 ForEach(Array(cData.enumerated()), id: \.offset) { i, val in
                     LineMark(
                         x: .value(xLabel, i),
@@ -228,8 +254,18 @@ private struct MetricLineChart: View {
                 RuleMark(x: .value(xLabel, step))
                     .foregroundStyle(.secondary.opacity(0.5))
             }
+            ForEach(references, id: \.label) { ref in
+                RuleMark(y: .value(ref.label, ref.value))
+                    .foregroundStyle(ref.color.opacity(0.5))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    .annotation(position: .top, alignment: .trailing) {
+                        Text(String(format: "\(ref.label) %.1f", ref.value))
+                            .font(.system(size: 9))
+                            .foregroundStyle(ref.color)
+                    }
+            }
         }
-        if companionAsLine, let (_, cLabel, cColor) = companion {
+        if companionAsLine, let (_, cLabel, cColor) = downsampledCompanion {
             base.chartForegroundStyleScale(domain: [label, cLabel], range: [color, cColor])
         } else {
             base.chartForegroundStyleScale(domain: [label], range: [color])
@@ -268,6 +304,17 @@ private struct MetricLineChart: View {
                 }
                 .font(.caption)
                 .frame(height: 16)
+
+                if !textReferences.isEmpty {
+                    HStack(spacing: 16) {
+                        ForEach(textReferences, id: \.label) { ref in
+                            Text("\(ref.label): \(String(format: "%.1f", ref.value))")
+                                .foregroundStyle(ref.color)
+                        }
+                    }
+                    .font(.system(size: 10, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                }
             }
         }
     }

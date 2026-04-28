@@ -109,17 +109,20 @@ struct GameHUDView: View {
                 hudButton("Restart", action: hud.onRestart)
                 pauseButton
                 hudButton("Report", action: hud.onReport)
+                hudButton("Diag", action: hud.onDiagnostics)
             }
             Divider()
             HStack(spacing: 8) {
                 hudButton("Save NN", action: hud.onSaveNetwork)
                 hudButton("Load NN", action: hud.onLoadNetwork)
             }
+            hudText("Predators", secondary: true)
             SegmentedButtons(
                 options: ["Off", "Low", "Med", "High"],
                 selectedIndex: PredatorsIntensity.allCases.firstIndex(of: hud.predatorsIntensity) ?? 0,
                 onSelect: { hud.onSelectPredatorsIntensity(PredatorsIntensity.allCases[$0]) }
             ).frame(width: 200)
+            hudText("Speed", secondary: true)
             HStack {
                 hudButton("<=", action: hud.onDecreaseSpeed)
                 hudText(String(format: "x%.1f", hud.simulationSpeed))

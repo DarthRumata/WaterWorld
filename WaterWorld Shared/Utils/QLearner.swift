@@ -9,6 +9,7 @@ import Foundation
 
 struct QLearningExperience: Identifiable, Sendable {
     let id: UUID = UUID()
+    let brainId: UUID
     let state: OrganismState
     let actionIndex: Int
     let reward: Double
@@ -19,8 +20,8 @@ struct QLearningExperience: Identifiable, Sendable {
 actor QLearner {
     static func makeNetwork() -> NeuralNetwork {
         NeuralNetworkBuilder(inputSize: 5)
-            .dense(10, activation: .relu)
-            .dense(10, activation: .relu)
+            .dense(32, activation: .relu)
+            .dense(32, activation: .relu)
             .dense(3, activation: .linear)
             .build(weightInitStrategy: .uniformXavier)
     }
@@ -45,7 +46,13 @@ actor QLearner {
     private(set) var epsilonDecay: Double
     private let surpriseRatio: Double = 0.25
     private var tdStats = SurpriseThresholdTracker()
-    private(set) var deathPenalty: Double = HyperparamSpecs.deathPenalty.defaultValue
+    // Death must be worse than the worst possible N-step accumulated reward
+    var deathPenalty: Double {
+        let minR = tanh(GlobalConstants.rewardTickSurvivalBonus - 0.5
+            - GlobalConstants.rewardCriticalEnergyThreshold / GlobalConstants.rewardEnergyDeltaScale)
+        let nStepScale = (1.0 - pow(gamma, Double(nStep))) / (1.0 - gamma)
+        return minR * nStepScale * 1.1   // 10% margin below worst N-step life
+    }
     private(set) var tau: Double = HyperparamSpecs.tau.defaultValue
     private let diagnosticsMinSteps: Int = 10
     private let diagnosticsStreakThreshold: Int = 3
@@ -68,6 +75,8 @@ actor QLearner {
     private var learningStepsCount = 0
     private var warningStreaks: [String: Int] = [:]
     private var isTraining = false
+    private var pendingBadSteps = 0
+    private var pendingEligibleSteps = 0
 
     init(
         epsilonGreedy: Double,
@@ -100,7 +109,6 @@ actor QLearner {
     func setCostFunction(_ type: CostFunctionType) { costFunction = type.make() }
     func setGamma(_ value: Double)        { gamma        = HyperparamSpecs.gamma.clamped(value) }
     func setTau(_ value: Double)          { tau          = HyperparamSpecs.tau.clamped(value) }
-    func setDeathPenalty(_ value: Double) { deathPenalty = HyperparamSpecs.deathPenalty.clamped(value) }
     func setLearningRate(_ value: Double) { learningRate = HyperparamSpecs.learningRate.clamped(value) }
     func setEpsilonDecay(_ value: Double) { epsilonDecay = HyperparamSpecs.epsilonDecay.clamped(value) }
     func setEpsilon(_ value: Double) async {
@@ -134,12 +142,12 @@ actor QLearner {
 
         if nextState != nil {
             if queue.count >= nStep {
-                emitExperience(from: queue, start: 0, end: nStep - 1)
+                emitExperience(brainId: brainId, from: queue, start: 0, end: nStep - 1)
                 nStepQueues[brainId]!.removeFirst()
             }
         } else {
             for i in 0..<queue.count {
-                emitExperience(from: queue, start: i, end: queue.count - 1)
+                emitExperience(brainId: brainId, from: queue, start: i, end: queue.count - 1)
             }
             nStepQueues.removeValue(forKey: brainId)
         }
@@ -147,16 +155,28 @@ actor QLearner {
     }
 
     private func emitExperience(
+        brainId: UUID,
         from queue: [(state: OrganismState, action: Int, nextState: OrganismState?)],
         start: Int, end: Int
     ) {
         var acc = 0.0
         var g = 1.0
+        var firstStepReward = 0.0
         for i in start...end {
-            acc += g * calculateReward(currentState: queue[i].state, nextState: queue[i].nextState)
+            let r = calculateReward(currentState: queue[i].state, nextState: queue[i].nextState)
+            if i == start { firstStepReward = r }
+            acc += g * r
             g *= gamma
         }
+
+        // Track: alive steps with healthy energy that received negative per-step reward
+        if queue[start].nextState != nil,
+           queue[start].state.energy >= GlobalConstants.rewardCriticalEnergyThreshold {
+            pendingEligibleSteps += 1
+            if firstStepReward < 0 { pendingBadSteps += 1 }
+        }
         let experience = QLearningExperience(
+            brainId: brainId,
             state: queue[start].state,
             actionIndex: queue[start].action,
             reward: acc,
@@ -241,6 +261,17 @@ actor QLearner {
         let adamLR = isAdamEnabled
             ? mainNetwork.meanWeightStep(alpha: learningRate, beta1: adamBeta1, beta2: adamBeta2, eps: adamEps)
             : 0.0
+        let meanW = mainNetwork.meanAbsWeight()
+        let updateRatio = meanW > 0 ? adamLR / meanW : 0.0
+
+        let critical = GlobalConstants.rewardCriticalEnergyThreshold
+        let criticalBatch = batch.filter { $0.state.energy < critical }
+        let healthyBatch  = batch.filter { $0.state.energy >= critical }
+        let badRatio = pendingEligibleSteps > 0 ? Double(pendingBadSteps) / Double(pendingEligibleSteps) : 0.0
+        let avgCritical = criticalBatch.isEmpty ? 0.0 : criticalBatch.map(\.reward).reduce(0, +) / Double(criticalBatch.count)
+        let avgHealthy  = healthyBatch.isEmpty  ? 0.0 : healthyBatch.map(\.reward).reduce(0, +)  / Double(healthyBatch.count)
+        pendingBadSteps = 0
+        pendingEligibleSteps = 0
 
         Task { @MainActor in
             QLearningStore.shared.appendLoss(loss, epsilon: eps)
@@ -250,6 +281,9 @@ actor QLearner {
             QLearningStore.shared.updateLearningWarnings(sustainedWarnings)
             QLearningStore.shared.updateCurrentNetwork(net)
             QLearningStore.shared.appendAdamLR(adamLR)
+            QLearningStore.shared.appendUpdateRatio(updateRatio)
+            QLearningStore.shared.appendRewardDiagnostics(badRatio: badRatio, critical: avgCritical, healthy: avgHealthy)
+            await QLearningStore.shared.updateQReferences(gamma: gamma, nStep: nStep, deathPenalty: deathPenalty)
         }
         if !sustainedWarnings.isEmpty {
             Task { await self.sustainedWarningHandler?(sustainedWarnings) }
@@ -341,9 +375,9 @@ actor QLearner {
         }
 
         let critical = GlobalConstants.rewardCriticalEnergyThreshold
-        if nextState.energy < critical {
+        if nextState.energy < critical && dE <= 0 {
             r -= (critical - nextState.energy) / GlobalConstants.rewardEnergyDeltaScale
-        } else {
+        } else if nextState.energy >= critical {
             let headroom = GlobalConstants.maxEnergy - critical
             r += (nextState.energy - critical) / headroom * 0.1
         }

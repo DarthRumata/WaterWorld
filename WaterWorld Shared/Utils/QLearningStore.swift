@@ -24,6 +24,12 @@ final class QLearningStore {
     private(set) var batchTargetDivergences: [Double] = []
     private(set) var batchTrainDurations: [Double] = []
     private(set) var batchAdamLRs: [Double] = []
+    private(set) var batchUpdateRatios: [Double] = []
+
+    // Reward diagnostics per batch
+    private(set) var batchBadRewardRatio: [Double] = []       // % rewards < deathPenalty
+    private(set) var batchRewardCritical: [Double] = []       // avg reward when energy < critical
+    private(set) var batchRewardHealthy: [Double] = []        // avg reward when energy >= critical
     private(set) var dailyHungerDeaths: [Int] = []
     private(set) var dailyPredatorDeaths: [Int] = []
     private var currentDayHungerDeaths: Int = 0
@@ -42,6 +48,11 @@ final class QLearningStore {
     // Real-time metrics for UI
     private(set) var lastAvgReward: Double = 0
     private(set) var lastAvgMaxQ: Double = 0
+    // Theoretical reference lines (updated each training batch)
+    private(set) var qRefMax: Double = 0      // maxR / (1-γ)
+    private(set) var qRefMin: Double = 0      // minR / (1-γ)
+    private(set) var rewardRefMax: Double = 0 // maxR · (1-γᴺ)/(1-γ)
+    private(set) var rewardRefMin: Double = 0 // minR · (1-γᴺ)/(1-γ)
     private(set) var learningWarnings: [LearningWarning] = []
     private(set) var currentNetwork: NeuralNetwork?
     private(set) var networkUpdateCount: Int = 0
@@ -86,6 +97,26 @@ final class QLearningStore {
 
     func appendAdamLR(_ lr: Double) {
         batchAdamLRs.append(lr)
+    }
+
+    func appendUpdateRatio(_ ratio: Double) {
+        batchUpdateRatios.append(ratio)
+    }
+
+    func updateQReferences(gamma: Double, nStep: Int, deathPenalty: Double) {
+        let maxR = tanh(GlobalConstants.rewardTickSurvivalBonus + 0.5 + 0.1)
+        let invGamma = max(1e-6, 1.0 - gamma)
+        let nStepScale = (1.0 - pow(gamma, Double(nStep))) / invGamma
+        qRefMax = maxR / invGamma
+        qRefMin = deathPenalty / invGamma   // death is the true minimum
+        rewardRefMax = maxR * nStepScale
+        rewardRefMin = deathPenalty * nStepScale
+    }
+
+    func appendRewardDiagnostics(badRatio: Double, critical: Double, healthy: Double) {
+        batchBadRewardRatio.append(badRatio)
+        batchRewardCritical.append(critical)
+        batchRewardHealthy.append(healthy)
     }
 
     func recordEpisodeBoundary(episode: Int) {
@@ -135,6 +166,10 @@ final class QLearningStore {
         batchTargetDivergences.removeAll()
         batchTrainDurations.removeAll()
         batchAdamLRs.removeAll()
+        batchUpdateRatios.removeAll()
+        batchBadRewardRatio.removeAll()
+        batchRewardCritical.removeAll()
+        batchRewardHealthy.removeAll()
         dailyHungerDeaths.removeAll()
         dailyPredatorDeaths.removeAll()
         currentDayHungerDeaths = 0

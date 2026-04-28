@@ -9,17 +9,17 @@ struct RewardSettingsView: View {
                 .font(.headline)
                 .padding(.bottom, 4)
 
-            ParamRowView(
-                symbol: "Death penalty",
-                value: hud.deathPenalty,
-                format: HyperparamSpecs.deathPenalty.format,
-                step: HyperparamSpecs.deathPenalty.step,
-                minValue: HyperparamSpecs.deathPenalty.minValue,
-                maxValue: HyperparamSpecs.deathPenalty.maxValue,
-                labelWidth: 120,
-                onSet: hud.onSetDeathPenalty,
-                hint: "Reward on organism death. Range: -1.0...0."
-            )
+            HStack {
+                Text("Death penalty")
+                    .frame(width: 120, alignment: .leading)
+                Spacer()
+                Text(String(format: "%.2f", hud.deathPenalty))
+                    .foregroundStyle(.secondary)
+                Text("(auto)")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .help("Auto-computed: −(N−1)·Rmax / γ^(N−1). Scales with N-step and gamma.")
         }
         .padding()
         .font(.system(size: 12, design: .monospaced))

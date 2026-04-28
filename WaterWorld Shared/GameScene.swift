@@ -43,6 +43,7 @@ class GameScene: SKScene {
     private var infoPopover: NSPopover?
     private weak var reportWindow: NSWindow?
     private weak var metricsWindow: NSWindow?
+    private weak var diagnosticsWindow: NSWindow?
     private var popoverNode: CustomPopoverNode?
     
     // Combine
@@ -101,9 +102,12 @@ class GameScene: SKScene {
             epsilonDecay: HyperparamSpecs.epsilonDecay.defaultValue,
             costFunction: costFunctionType.make(),
             networkUpdateHandler: { [weak self] epsilon in
+                guard let self else { return }
+                let dp = await self.qLearner.deathPenalty
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     hudModel.epsilon = simulationMode == .normal ? 0.0 : epsilon
+                    hudModel.deathPenalty = dp
                 }
             },
             sustainedWarningHandler: { [weak self] _ in
@@ -214,6 +218,7 @@ class GameScene: SKScene {
             }
         }
         hudModel.onReport = { [weak self] in self?.presentQLearningReport() }
+        hudModel.onDiagnostics = { [weak self] in self?.presentDiagnostics() }
         hudModel.onToggleMode = { [weak self] in self?.toggleSimulationMode() }
         hudModel.onSelectPredatorsIntensity = { [weak self] intensity in self?.setPredatorsIntensity(intensity) }
         hudModel.onSelectCostFunction = { [weak self] type in self?.setCostFunctionType(type) }
@@ -252,11 +257,6 @@ class GameScene: SKScene {
         hudModel.onSetDodgeCost = { [weak self] value in
             GlobalConstants.predationDodgeCost = max(0, value)
             self?.hudModel.dodgeCost = GlobalConstants.predationDodgeCost
-        }
-        hudModel.onSetDeathPenalty = { [weak self] value in
-            guard let self else { return }
-            Task { await self.qLearner.setDeathPenalty(value) }
-            self.hudModel.deathPenalty = value
         }
         hudModel.onToggleAdam = { [weak self] enabled in
             guard let self else { return }
@@ -624,11 +624,25 @@ class GameScene: SKScene {
     }
     
     #if os(OSX)
+    private func presentDiagnostics() {
+        if let existing = diagnosticsWindow {
+            existing.makeKeyAndOrderFront(nil)
+            return
+        }
+        let hosting = NSHostingController(rootView: DiagnosticsView())
+        let window = NSWindow(contentViewController: hosting)
+        window.title = "Reward Diagnostics"
+        window.setContentSize(NSSize(width: 640, height: 560))
+        window.makeKeyAndOrderFront(nil)
+        diagnosticsWindow = window
+    }
+
     private func presentQLearningReport() {
         if let existing = reportWindow {
             existing.makeKeyAndOrderFront(nil)
             return
         }
+        Task { await pauseSimulation() }
         let hosting = NSHostingController(rootView: QLearningReportView())
         let window = NSWindow(contentViewController: hosting)
         window.title = "Q-Learning Report"

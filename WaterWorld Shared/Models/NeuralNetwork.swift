@@ -5,6 +5,7 @@
 //  Created by Stas Kirichok on 12/14/24.
 //
 
+import Accelerate
 import Foundation
 
 // MARK: - Learning Health
@@ -192,6 +193,18 @@ struct NeuralNetwork: Sendable {
 
     /// Mean actual weight step: α · mean(|m̂ᵢ| / (√v̂ᵢ + ε)), bias-corrected.
     /// Range [0, alpha]. High = gradients consistent, network learning fast. Low = gradients noisy, network stalling.
+    func meanAbsWeight() -> Double {
+        var sum = 0.0
+        var count = 0
+        for layer in layers {
+            for neuron in layer.neurons {
+                for w in neuron.weights { sum += abs(w); count += 1 }
+                sum += abs(neuron.bias); count += 1
+            }
+        }
+        return count > 0 ? sum / Double(count) : 1.0
+    }
+
     func meanWeightStep(alpha: Double, beta1: Double, beta2: Double, eps: Double) -> Double {
         guard adamStep > 0 else { return 0 }
         let bc1 = 1.0 - pow(beta1, Double(adamStep))
@@ -271,14 +284,15 @@ struct NeuralLayer: Sendable {
     func applyActivation(_ zs: [Double]) -> [Double] {
         switch activation {
         case .sigmoid:
-            return zs.map { 1.0 / (1.0 + exp(-$0)) }
+            let exps = vForce.exp(vDSP.multiply(-1.0, zs))
+            return vForce.reciprocal(vDSP.add(1.0, exps))
         case .relu:
-            return zs.map { max(0.0, $0) }
+            return vDSP.threshold(zs, to: 0.0, with: .clampToThreshold)
         case .softmax:
             let maxZ = zs.max() ?? 0.0
-            let exps = zs.map { exp($0 - maxZ) }
-            let sumExp = exps.reduce(0.0, +)
-            return exps.map { $0 / (sumExp == 0 ? 1 : sumExp) }
+            let exps = vForce.exp(vDSP.add(-maxZ, zs))
+            let sumExp = vDSP.sum(exps)
+            return vDSP.multiply(1.0 / (sumExp == 0 ? 1 : sumExp), exps)
         case .linear:
             return zs
         }
@@ -288,9 +302,8 @@ struct NeuralLayer: Sendable {
         let deltas = computeDeltas(error: error, zs: zs)
         var prevLayerError = [Double](repeating: 0.0, count: neurons[0].weights.count)
         for i in neurons.indices {
-            for j in neurons[i].weights.indices {
-                prevLayerError[j] += neurons[i].weights[j] * deltas[i]
-            }
+            // prevLayerError += deltas[i] * neurons[i].weights  (vectorized scale-add)
+            vDSP.add(vDSP.multiply(deltas[i], neurons[i].weights), prevLayerError, result: &prevLayerError)
             neurons[i].updateWeights(learningRate: learningRate, delta: deltas[i], inputs: inputs, step: step, beta1: beta1, beta2: beta2, eps: eps, useAdam: useAdam)
         }
         return prevLayerError

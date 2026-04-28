@@ -5,7 +5,7 @@
 //  Created by Stas Kirichok on 12/14/24.
 //
 
-import Foundation
+import Accelerate
 
 struct Neuron: Sendable {
     private(set) var weights: [Double]
@@ -25,17 +25,11 @@ struct Neuron: Sendable {
     }
 
     func weightedSum(inputs: [Double]) -> Double {
-        if inputs.count != weights.count {
-            fatalError("Previous layer neuron count shoud be equal to quantity of weights in each neuron of the next layer")
-        }
-
-        return zip(weights, inputs).map(*).reduce(0, +) + bias
+        vDSP.dot(weights, inputs) + bias
     }
 
     mutating func polyakBlend(toward main: Neuron, tau: Double) {
-        for i in weights.indices {
-            weights[i] = tau * main.weights[i] + (1 - tau) * weights[i]
-        }
+        weights = vDSP.add(vDSP.multiply(tau, main.weights), vDSP.multiply(1 - tau, weights))
         bias = tau * main.bias + (1 - tau) * bias
     }
 
@@ -47,23 +41,25 @@ struct Neuron: Sendable {
             let t = Double(step)
             let β1t = pow(beta1, t)
             let β2t = pow(beta2, t)
-            for i in weights.indices {
-                let g = delta * inputs[i]
-                m[i] = beta1 * m[i] + (1 - beta1) * g
-                v[i] = beta2 * v[i] + (1 - beta2) * g * g
-                let mHat = m[i] / (1 - β1t)
-                let vHat = v[i] / (1 - β2t)
-                weights[i] -= learningRate * mHat / (sqrt(vHat) + eps)
-            }
-            mBias = beta1 * mBias + (1 - beta1) * delta
-            vBias = beta2 * vBias + (1 - beta2) * delta * delta
+
+            let g = vDSP.multiply(delta, inputs)
+            m = vDSP.add(vDSP.multiply(beta1, m), vDSP.multiply(1 - beta1, g))
+            v = vDSP.add(vDSP.multiply(beta2, v), vDSP.multiply(1 - beta2, vDSP.multiply(g, g)))
+
+            let mHat = vDSP.multiply(1 / (1 - β1t), m)
+            let vHat = vDSP.multiply(1 / (1 - β2t), v)
+            let denom = vDSP.add(eps, vForce.sqrt(vHat))
+            let update = vDSP.multiply(learningRate, vDSP.divide(mHat, denom))
+            weights = vDSP.add(weights, vDSP.multiply(-1.0, update))
+
+            let gBias = delta
+            mBias = beta1 * mBias + (1 - beta1) * gBias
+            vBias = beta2 * vBias + (1 - beta2) * gBias * gBias
             let mHatBias = mBias / (1 - β1t)
             let vHatBias = vBias / (1 - β2t)
             bias -= learningRate * mHatBias / (sqrt(vHatBias) + eps)
         } else {
-            for i in weights.indices {
-                weights[i] -= learningRate * delta * inputs[i]
-            }
+            weights = vDSP.add(weights, vDSP.multiply(-(learningRate * delta), inputs))
             bias -= learningRate * delta
         }
     }

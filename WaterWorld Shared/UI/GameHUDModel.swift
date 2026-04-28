@@ -37,7 +37,7 @@ final class GameHUDModel {
     var dodgeEnergyRequired: Double = GlobalConstants.predationDodgeEnergyRequired
     var dodgeCost: Double = GlobalConstants.predationDodgeCost
     // MARK: - Reward params
-    var deathPenalty: Double = HyperparamSpecs.deathPenalty.defaultValue
+    var deathPenalty: Double = 0.0
     var nStep: Int = Int(HyperparamSpecs.nStep.defaultValue)
 
     // MARK: - Actions
@@ -56,7 +56,6 @@ final class GameHUDModel {
     var onSetEpsilonDecay: (Double) -> Void = { _ in }
     var onSetDodgeEnergyRequired: (Double) -> Void = { _ in }
     var onSetDodgeCost: (Double) -> Void = { _ in }
-    var onSetDeathPenalty: (Double) -> Void = { _ in }
     var onToggleAdam: (Bool) -> Void = { _ in }
     var onSetAdamBeta1: (Double) -> Void = { _ in }
     var onSetAdamBeta2: (Double) -> Void = { _ in }
@@ -65,4 +64,5 @@ final class GameHUDModel {
     var onTapMetric: (MetricTab) -> Void = { _ in }
     var onSaveNetwork: () -> Void = {}
     var onLoadNetwork: () -> Void = {}
+    var onDiagnostics: () -> Void = {}
 }

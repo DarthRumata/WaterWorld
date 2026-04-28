@@ -52,6 +52,7 @@
 				UI/LearningParamsView.swift,
 				UI/LearningWarningBanner.swift,
 				UI/MainView.swift,
+				UI/DiagnosticsView.swift,
 				UI/MetricsChartView.swift,
 				UI/Organism.swift,
 				UI/OrganismPopover/LayerView.swift,
