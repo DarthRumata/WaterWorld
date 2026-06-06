@@ -10,27 +10,19 @@ struct SimulationSettingsView: View {
                 .padding(.bottom, 4)
 
             ParamRowView(
-                symbol: "Min energy to dodge",
-                value: hud.dodgeEnergyRequired,
-                format: "%.0f",
-                step: 10,
-                minValue: 0,
-                labelWidth: 150,
-                onSet: hud.onSetDodgeEnergyRequired,
-                hint: "Minimum energy an organism needs to attempt a dodge. Below this — instant death."
-            )
-            ParamRowView(
-                symbol: "Dodge cost",
+                symbol: "Dodge cost (min)",
                 value: hud.dodgeCost,
                 format: "%.0f",
                 step: 10,
                 minValue: 0,
                 labelWidth: 150,
                 onSet: hud.onSetDodgeCost,
-                hint: "Energy lost on a successful dodge."
+                hint: "Min energy lost on a successful dodge (at depth 0.3). Max is \(Int(GlobalConstants.predationDodgeCostMax)) at surface."
             )
         }
         .padding()
+        .background(Color(NSColor.controlBackgroundColor))
+        .colorScheme(.light)
         .font(.system(size: 12, design: .monospaced))
         .foregroundStyle(.primary)
         .frame(width: 360)

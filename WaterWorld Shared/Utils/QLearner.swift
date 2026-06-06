@@ -18,14 +18,15 @@ struct QLearningExperience: Identifiable, Sendable {
 }
 
 actor QLearner {
-    static func makeNetwork() -> NeuralNetwork {
-        NeuralNetworkBuilder(inputSize: 5)
-            .dense(32, activation: .relu)
-            .dense(32, activation: .relu)
-            .dense(3, activation: .linear)
-            .build(weightInitStrategy: .uniformXavier)
+    static let defaultHiddenLayers: [Int] = [32, 32]
+
+    static func makeNetwork(hiddenLayers: [Int] = defaultHiddenLayers) -> NeuralNetwork {
+        var builder = NeuralNetworkBuilder(inputSize: 5)
+        for units in hiddenLayers { builder = builder.dense(units, activation: .relu) }
+        return builder.dense(3, activation: .linear).build(weightInitStrategy: .uniformXavier)
     }
 
+    private(set) var hiddenLayers: [Int] = defaultHiddenLayers
     var mainNetwork = QLearner.makeNetwork()
     private lazy var targetNetwork: NeuralNetwork = mainNetwork
     
@@ -45,14 +46,20 @@ actor QLearner {
     private let epsilonMin: Double = HyperparamSpecs.epsilon.minValue
     private(set) var epsilonDecay: Double
     private let surpriseRatio: Double = 0.25
+    private let targetDriftMin: Double = 4.0    // % — increase LR if drift below this
+    private let targetDriftMax: Double = 10.0   // % — decrease LR if drift above this
+    private let lrAdaptationStep: Double = 0.002 // 0.2% adjustment per batch
     private var tdStats = SurpriseThresholdTracker()
-    // Death must be worse than the worst possible N-step accumulated reward
+    // Death must be worse than the worst possible N-step accumulated reward.
+    // Worst case: energy at 0, max energy loss delta, no survival bonus effect
+    // energy level term at 0: -(threshold/threshold)*0.2 = -0.2
     var deathPenalty: Double {
-        let minR = tanh(GlobalConstants.rewardTickSurvivalBonus - 0.5
-            - GlobalConstants.rewardCriticalEnergyThreshold / GlobalConstants.rewardEnergyDeltaScale)
+        let minR = tanh(GlobalConstants.rewardTickSurvivalBonus - 0.5 - 0.6)
         let nStepScale = (1.0 - pow(gamma, Double(nStep))) / (1.0 - gamma)
-        return minR * nStepScale * 1.1   // 10% margin below worst N-step life
+        return minR * nStepScale * 1.1
     }
+    private(set) var isStateRewardEnabled: Bool = true
+    private(set) var isDeltaRewardEnabled: Bool = true
     private(set) var tau: Double = HyperparamSpecs.tau.defaultValue
     private let diagnosticsMinSteps: Int = 10
     private let diagnosticsStreakThreshold: Int = 3
@@ -120,6 +127,23 @@ actor QLearner {
     func setAdamEps(_ value: Double)      { adamEps   = HyperparamSpecs.adamEps.clamped(value);   mainNetwork.resetAdamState() }
     func setAdamEnabled(_ enabled: Bool)  { isAdamEnabled = enabled; mainNetwork.resetAdamState() }
     func setNStep(_ value: Int)           { nStep = max(1, min(20, value)); nStepQueues.removeAll() }
+    func setStateRewardEnabled(_ enabled: Bool) { isStateRewardEnabled = enabled }
+    func setDeltaRewardEnabled(_ enabled: Bool) { isDeltaRewardEnabled = enabled }
+
+    func applyArchitecture(_ layers: [Int]) async {
+        guard !layers.isEmpty, layers.allSatisfy({ $0 > 0 }) else { return }
+        hiddenLayers = layers
+        mainNetwork = Self.makeNetwork(hiddenLayers: layers)
+        targetNetwork = mainNetwork
+        normalBuffer.removeAll(); normalBufferIndex = 0
+        surpriseBuffer.removeAll(); surpriseBufferIndex = 0
+        nStepQueues.removeAll()
+        experiencesSinceLastTrain = 0
+        learningStepsCount = 0
+        epsilonGreedy = HyperparamSpecs.epsilon.maxValue
+        await agentPolicy.update(network: mainNetwork, epsilon: epsilonGreedy)
+        await MainActor.run { QLearningStore.shared.clear() }
+    }
 
     func makeBrainFactory() -> @Sendable () -> QBrain {
         let policy = agentPolicy
@@ -241,6 +265,8 @@ actor QLearner {
 
         let (predictedQs, targets, maxQSum) = computeBatchPredictions(batch: batch)
         let loss = costFunction.loss(predictions: predictedQs, targets: targets)
+        let meanAbsTarget = targets.map(abs).reduce(0, +) / Double(max(targets.count, 1))
+        let relativeLoss = meanAbsTarget > 1e-6 ? sqrt(loss) / meanAbsTarget * 100.0 : 0.0
 
         applyBackprop(batch: batch, targets: targets)
 
@@ -249,6 +275,13 @@ actor QLearner {
 
         let targetDivergence = targetNetwork.weightDivergencePercent(from: mainNetwork)
         targetNetwork.polyakBlend(toward: mainNetwork, tau: tau)
+
+        // Auto-adapt learning rate to keep target drift in [targetDriftMin, targetDriftMax]
+        if targetDivergence > targetDriftMax {
+            learningRate = max(HyperparamSpecs.learningRate.minValue, learningRate * (1.0 - lrAdaptationStep))
+        } else if targetDivergence < targetDriftMin {
+            learningRate = min(HyperparamSpecs.learningRate.maxValue, learningRate * (1.0 + lrAdaptationStep))
+        }
 
         let eps = epsilonGreedy
         let net = mainNetwork
@@ -264,17 +297,36 @@ actor QLearner {
         let meanW = mainNetwork.meanAbsWeight()
         let updateRatio = meanW > 0 ? adamLR / meanW : 0.0
 
-        let critical = GlobalConstants.rewardCriticalEnergyThreshold
-        let criticalBatch = batch.filter { $0.state.energy < critical }
-        let healthyBatch  = batch.filter { $0.state.energy >= critical }
         let badRatio = pendingEligibleSteps > 0 ? Double(pendingBadSteps) / Double(pendingEligibleSteps) : 0.0
-        let avgCritical = criticalBatch.isEmpty ? 0.0 : criticalBatch.map(\.reward).reduce(0, +) / Double(criticalBatch.count)
-        let avgHealthy  = healthyBatch.isEmpty  ? 0.0 : healthyBatch.map(\.reward).reduce(0, +)  / Double(healthyBatch.count)
+
+        // Reward component breakdown (approximated from start state of each experience)
+        let threshold = GlobalConstants.rewardCriticalEnergyThreshold
+        let maxE = GlobalConstants.maxEnergy
+        var deltaSum = 0.0; var stateSum = 0.0
+        for exp in batch {
+            guard let nextState = exp.nextState else { continue }
+            let dE = nextState.energy - exp.state.energy
+            if isDeltaRewardEnabled {
+                if dE > 0 { deltaSum += min(dE / GlobalConstants.rewardEnergyDeltaScale, 0.5) }
+                else if dE < 0 { deltaSum += max(dE / GlobalConstants.rewardEnergyLossPenaltyScale, -0.5) }
+            }
+            if isStateRewardEnabled {
+                if nextState.energy >= threshold {
+                    stateSum += (nextState.energy - threshold) / (maxE - threshold) * 0.2
+                } else {
+                    stateSum -= (threshold - nextState.energy) / threshold * 0.6
+                }
+            }
+        }
+        let n = Double(max(batch.count, 1))
+        let avgTick = GlobalConstants.rewardTickSurvivalBonus
+        let avgDelta = deltaSum / n
+        let avgState = stateSum / n
         pendingBadSteps = 0
         pendingEligibleSteps = 0
 
         Task { @MainActor in
-            QLearningStore.shared.appendLoss(loss, epsilon: eps)
+            QLearningStore.shared.appendLoss(loss, epsilon: eps, relativeLoss: relativeLoss)
             QLearningStore.shared.appendRewardTrend(avgReward)
             QLearningStore.shared.appendMaxQTrend(avgMaxQ)
             QLearningStore.shared.appendTargetDivergence(targetDivergence)
@@ -282,8 +334,9 @@ actor QLearner {
             QLearningStore.shared.updateCurrentNetwork(net)
             QLearningStore.shared.appendAdamLR(adamLR)
             QLearningStore.shared.appendUpdateRatio(updateRatio)
-            QLearningStore.shared.appendRewardDiagnostics(badRatio: badRatio, critical: avgCritical, healthy: avgHealthy)
-            await QLearningStore.shared.updateQReferences(gamma: gamma, nStep: nStep, deathPenalty: deathPenalty)
+            QLearningStore.shared.appendRewardComponents(tick: avgTick, delta: avgDelta, state: avgState)
+            QLearningStore.shared.appendRewardDiagnostics(badRatio: badRatio)
+            await QLearningStore.shared.updateQReferences(gamma: gamma, deathPenalty: deathPenalty)
         }
         if !sustainedWarnings.isEmpty {
             Task { await self.sustainedWarningHandler?(sustainedWarnings) }
@@ -367,19 +420,26 @@ actor QLearner {
 
         var r = GlobalConstants.rewardTickSurvivalBonus
 
-        let dE = nextState.energy - currentState.energy
-        if dE > 0 {
-            r += min(dE / GlobalConstants.rewardEnergyDeltaScale, 0.5)
-        } else if dE < 0 {
-            r += max(dE / GlobalConstants.rewardEnergyLossPenaltyScale, -0.5)
+        // Energy delta: reward gaining energy, penalise losing it
+        if isDeltaRewardEnabled {
+            let dE = nextState.energy - currentState.energy
+            if dE > 0 {
+                r += min(dE / GlobalConstants.rewardEnergyDeltaScale, 0.5)
+            } else if dE < 0 {
+                r += max(dE / GlobalConstants.rewardEnergyLossPenaltyScale, -0.5)
+            }
         }
 
-        let critical = GlobalConstants.rewardCriticalEnergyThreshold
-        if nextState.energy < critical && dE <= 0 {
-            r -= (critical - nextState.energy) / GlobalConstants.rewardEnergyDeltaScale
-        } else if nextState.energy >= critical {
-            let headroom = GlobalConstants.maxEnergy - critical
-            r += (nextState.energy - critical) / headroom * 0.1
+        // Energy level: neutral at nightSurvivalThreshold, negative below, positive above.
+        // Asymmetric: hunger signal (0.6) stronger than abundance signal (0.2).
+        if isStateRewardEnabled {
+            let threshold = GlobalConstants.rewardCriticalEnergyThreshold
+            let maxE = GlobalConstants.maxEnergy
+            if nextState.energy >= threshold {
+                r += (nextState.energy - threshold) / (maxE - threshold) * 0.2
+            } else {
+                r -= (threshold - nextState.energy) / threshold * 0.6
+            }
         }
 
         return tanh(r)

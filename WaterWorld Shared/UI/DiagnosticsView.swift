@@ -6,26 +6,20 @@
 import SwiftUI
 import Charts
 
+private let diagDeathLimit = 10_000
+
 struct DiagnosticsView: View {
     private let store = QLearningStore.shared
-
-    private var deathExperiences: [QLearningExperience] {
-        store.steps.filter { $0.nextState == nil }
-    }
-
-    private var predationDeaths: [QLearningExperience] {
-        deathExperiences.filter { $0.state.energy >= GlobalConstants.rewardCriticalEnergyThreshold }
-    }
-
-    private var starvationDeaths: [QLearningExperience] {
-        deathExperiences.filter { $0.state.energy < GlobalConstants.rewardCriticalEnergyThreshold }
-    }
+    @State private var deathExperiences: [QLearningExperience] = []
+    @State private var predationDeaths: [QLearningExperience] = []
+    @State private var starvationDeaths: [QLearningExperience] = []
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 Text("Death Analysis").font(.title2).bold()
 
+                rewardComponentsSection
                 updateRatioSection
                 causeSection
                 energySection
@@ -35,6 +29,65 @@ struct DiagnosticsView: View {
             .padding(20)
         }
         .frame(minWidth: 620, minHeight: 540)
+        .task(id: store.steps.count) { await rebuildDeaths() }
+    }
+
+    private func rebuildDeaths() async {
+        let steps = store.steps
+        let threshold = GlobalConstants.rewardCriticalEnergyThreshold
+        let deaths = await Task.detached(priority: .userInitiated) {
+            Array(steps.suffix(diagDeathLimit).filter { $0.nextState == nil })
+        }.value
+        let predation = deaths.filter { $0.state.energy >= threshold }
+        let starvation = deaths.filter { $0.state.energy < threshold }
+        deathExperiences = deaths
+        predationDeaths = predation
+        starvationDeaths = starvation
+    }
+
+    // MARK: - Reward Components
+
+    private var rewardComponentsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Reward components (avg per batch)")
+                .font(.headline)
+            Text("Tick = survival bonus (const). Delta = energy change reward. State = energy level reward.")
+                .font(.caption).foregroundStyle(.secondary)
+
+            if store.batchTickRewards.isEmpty {
+                ContentUnavailableView("No data yet", systemImage: "chart.line.uptrend.xyaxis")
+                    .frame(height: 160)
+            } else {
+                Chart {
+                    ForEach(Array(store.batchTickRewards.enumerated()), id: \.offset) { i, v in
+                        LineMark(x: .value("Step", i), y: .value("Reward", v),
+                                 series: .value("S", "Tick"))
+                        .foregroundStyle(by: .value("S", "Tick"))
+                        .interpolationMethod(.catmullRom)
+                    }
+                    ForEach(Array(store.batchDeltaRewards.enumerated()), id: \.offset) { i, v in
+                        LineMark(x: .value("Step", i), y: .value("Reward", v),
+                                 series: .value("S", "Delta E"))
+                        .foregroundStyle(by: .value("S", "Delta E"))
+                        .interpolationMethod(.catmullRom)
+                    }
+                    ForEach(Array(store.batchStateRewards.enumerated()), id: \.offset) { i, v in
+                        LineMark(x: .value("Step", i), y: .value("Reward", v),
+                                 series: .value("S", "State E"))
+                        .foregroundStyle(by: .value("S", "State E"))
+                        .interpolationMethod(.catmullRom)
+                    }
+                    RuleMark(y: .value("Zero", 0))
+                        .foregroundStyle(.secondary.opacity(0.4))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                }
+                .chartForegroundStyleScale(domain: ["Tick", "Delta E", "State E"],
+                                           range: [Color.yellow, Color.blue, Color.orange])
+                .chartXAxisLabel("Training step")
+                .chartYAxisLabel("Avg component")
+                .frame(height: 160)
+            }
+        }
     }
 
     // MARK: - Update/Weight ratio
@@ -114,7 +167,7 @@ struct DiagnosticsView: View {
             } else {
                 let buckets = energyBuckets()
                 Chart(buckets, id: \.label) { b in
-                    BarMark(x: .value("Energy", b.label), y: .value("Deaths", b.count))
+                    BarMark(x: .value("Energy", b.label), y: .value("Deaths", b.count), width: .ratio(0.8))
                         .foregroundStyle(b.isPredation ? Color.red : Color.orange)
                 }
                 .chartXAxisLabel("Energy range")
@@ -153,7 +206,7 @@ struct DiagnosticsView: View {
     private var timeSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Time of death (day progress)").font(.headline)
-            Text("0 = dawn, 0.5 = midday, 1 = dusk. Night → less light → more starvation.")
+            Text("0 = dawn (7:00), 0.25 = midday (13:00), 0.5 = dusk (19:00), 0.75 = midnight (1:00). Peak deaths at 0.8–1.0 = late night → starvation.")
                 .font(.caption).foregroundStyle(.secondary)
 
             if deathExperiences.isEmpty {
@@ -162,7 +215,7 @@ struct DiagnosticsView: View {
             } else {
                 let buckets = timeBuckets()
                 Chart(buckets, id: \.label) { b in
-                    BarMark(x: .value("Time", b.label), y: .value("Deaths", b.count))
+                    BarMark(x: .value("Time", b.label), y: .value("Deaths", b.count), width: .ratio(0.8))
                         .foregroundStyle(Color.indigo)
                 }
                 .chartXAxisLabel("Day progress")

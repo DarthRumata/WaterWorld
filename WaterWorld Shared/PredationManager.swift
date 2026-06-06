@@ -10,7 +10,7 @@ import CoreGraphics
 
 // Events that the environment can apply to organisms during a tick
 enum OrganismEvent {
-    case damage(id: UUID, amount: Double)
+    case dodge(id: UUID, cost: Double)   // successful dodge: energy loss + pushed deeper
     case kill(id: UUID, cause: CauseOfDeath)
 }
 
@@ -69,13 +69,17 @@ final class PredationManager {
         let eligible = pairs.filter { Double($0.depth) <= cutoffDepth }
         guard !eligible.isEmpty else { return [] }
 
+        let eligibleByID = Dictionary(uniqueKeysWithValues: eligible.map { ($0.id, $0) })
         var events: [OrganismEvent] = []
         for _ in dueTimes {
             if let targetID = await predationSystem.chooseTarget(from: eligible.map { ($0.id, $0.depth) }) {
-                let targetEnergy = eligible.first(where: { $0.id == targetID })?.energy ?? 0
+                let target = eligibleByID[targetID]
+                let targetEnergy: Double = target?.energy ?? 0
+                let targetDepth: Double = target.map { Double($0.depth) } ?? 0
+                let dodgeCost = GlobalConstants.dodgeCost(atDepth: targetDepth)
                 let canDodge = Double.random(in: 0...1) < GlobalConstants.predationDodgeChance
-                if canDodge && targetEnergy >= GlobalConstants.predationDodgeEnergyRequired {
-                    events.append(.damage(id: targetID, amount: GlobalConstants.predationDodgeCost))
+                if canDodge && targetEnergy >= dodgeCost + GlobalConstants.predationDodgeSafetyBuffer {
+                    events.append(.dodge(id: targetID, cost: dodgeCost))
                 } else {
                     events.append(.kill(id: targetID, cause: .predation))
                 }

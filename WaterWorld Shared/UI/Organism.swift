@@ -85,14 +85,33 @@ class Organism: SKNode {
         bubble.run(colorChange)
     }
 
-    func moveUp() async {
-        let pace = (parent?.frame.size.height ?? 0) * GlobalConstants.movementPaceFraction
-        await move(by: CGPoint(x: model.direction.rawValue * pace, y: pace))
-    }
+    func moveUp() async { await moveToLogicalDepth() }
+    func moveDown() async { await moveToLogicalDepth() }
 
-    func moveDown() async {
-        let pace = (parent?.frame.size.height ?? 0) * GlobalConstants.movementPaceFraction
-        await move(by: CGPoint(x: model.direction.rawValue * pace, y: -pace))
+    // Animates to the absolute position derived from logicalDepth — single source of truth.
+    // Avoids reading mid-animation position, so no drift regardless of simulation speed.
+    private func moveToLogicalDepth() async {
+        guard let parentNode = parent else { return }
+        let containerH = parentNode.frame.size.height
+        let pace = containerH * GlobalConstants.movementPaceFraction
+        let logDepth = CGFloat(await model.logicalDepth)
+        let direction = await model.direction
+        let radius = bubble.frame.width / 2
+
+        let targetY = (1.0 - logDepth / CGFloat(GlobalConstants.maxDepth)) * containerH
+        let targetX = position.x + direction.rawValue * pace
+
+        let newPosition = CGPoint(
+            x: max(radius, min(targetX, parentNode.frame.size.width - radius)),
+            y: max(radius, min(targetY, containerH - radius))
+        )
+
+        guard position != newPosition else { return }
+        if speed > 3 {
+            position = newPosition
+        } else {
+            await run(SKAction.move(to: newPosition, duration: GlobalConstants.gameTickDuration))
+        }
     }
 
     private func listenModel() {
@@ -110,37 +129,6 @@ class Organism: SKNode {
         }
     }
 
-    private func move(by delta: CGPoint) async {
-        guard let parentNode = parent else { return }
-
-        // Calculate the proposed new position
-        var newPosition = CGPoint(x: position.x + delta.x, y: position.y + delta.y)
-
-        // Get the parent's size
-        let parentSize = parentNode.frame.size
-
-        // Define the organism's size (assuming it's a circle or square for simplicity)
-        let organismRadius: CGFloat = bubble.frame.width / 2
-
-        // Define the boundaries within which the organism can move
-        let minX = organismRadius
-        let maxX = parentSize.width - organismRadius
-        let minY = organismRadius
-        let maxY = parentSize.height - organismRadius
-
-        // Clamp the new position within the boundaries
-        newPosition.x = max(minX, min(newPosition.x, maxX))
-        newPosition.y = max(minY, min(newPosition.y, maxY))
-
-        if position != newPosition {
-            if speed > 3 {
-                position = newPosition
-            } else {
-                let moveAction = SKAction.move(to: newPosition, duration: GlobalConstants.gameTickDuration)
-                await run(moveAction)
-            }
-        }
-    }
 
     private func wait() async {
         guard speed <= 3 else { return }

@@ -49,6 +49,9 @@ actor OrganismModel: Equatable {
     private var lastInput: OrganismState? = nil
     private(set) var isDead: Bool = false
     private var wasAttackedThisTick: Bool = false
+    // Logical depth updated immediately on action — used for game logic (predation)
+    // to avoid reading mid-animation SpriteKit position.
+    private(set) var logicalDepth: Double = GlobalConstants.maxDepth * 0.5
 
     // Triggers
 
@@ -71,8 +74,10 @@ actor OrganismModel: Equatable {
         name: String,
         logger: Logger,
         tracker: OrganismTracker,
+        initialDepth: Double,
         onDeath: @escaping @MainActor @Sendable (OrganismModel, CauseOfDeath) -> Void
     ) {
+        self.logicalDepth = initialDepth
         // Create streams once. AsyncStream calls the closure synchronously,
         // so continuations are set before any other code runs.
         var aCont: AsyncStream<Action>.Continuation!
@@ -117,6 +122,10 @@ actor OrganismModel: Equatable {
     func applyResult(state: OrganismState, action: Action) async {
         guard !isDead else { return }
         if action != .wait { direction = direction == .left ? .right : .left }
+        // Update logical depth immediately — avoids reading mid-animation position next tick
+        let depthStep = GlobalConstants.maxDepth * Double(GlobalConstants.movementPaceFraction) // = 4.0
+        if action == .moveUp   { logicalDepth = max(0, logicalDepth - depthStep) }
+        else if action == .moveDown { logicalDepth = min(GlobalConstants.maxDepth, logicalDepth + depthStep) }
         actionContinuation?.yield(action)
         spentEnergy(by: action)
         Task { await tracker.track(action: action, dayProgress: state.dayProgress) }

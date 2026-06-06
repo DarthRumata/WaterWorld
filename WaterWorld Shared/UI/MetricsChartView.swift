@@ -6,8 +6,15 @@
 import SwiftUI
 import Charts
 
+private extension View {
+    @ViewBuilder
+    func `if`<T: View>(_ condition: Bool, transform: (Self) -> T) -> some View {
+        if condition { transform(self) } else { self }
+    }
+}
+
 enum MetricTab: String, CaseIterable {
-    case loss = "Loss"
+    case relativeLoss = "Loss %"
     case reward = "Reward / Q"
     case mortality = "Mortality"
     case nightEnergy = "Night Energy"
@@ -41,10 +48,13 @@ struct MetricsChartView: View {
     @ViewBuilder
     private var chartView: some View {
         switch selectedTab {
-        case .loss:
+        case .relativeLoss:
             MetricLineChart(
-                data: store.batchLosses, label: "Loss", color: .red,
-                xLabel: "Training step", companion: (store.batchEpsilons, "ε", .purple)
+                data: store.batchRelativeLosses,
+                label: "Loss %",
+                color: .orange,
+                xLabel: "Training step",
+                yFormat: "%.1f%%"
             )
         case .reward:
             MetricLineChart(
@@ -52,10 +62,6 @@ struct MetricsChartView: View {
                 xLabel: "Training step",
                 companion: (store.batchMaxQs, "Avg Max Q", .green),
                 companionAsLine: true,
-                references: [
-                    (value: store.rewardRefMax, label: "R_max", color: .blue),
-                    (value: store.rewardRefMin, label: "R_min", color: .blue)
-                ],
                 textReferences: [
                     (label: "Q_max", value: store.qRefMax, color: .green),
                     (label: "Q_min", value: store.qRefMin, color: .green)
@@ -153,14 +159,18 @@ private struct MortalityChart: View {
                         )
                         .foregroundStyle(by: .value("Cause", bar.cause))
                     }
-                    ForEach(episodeBoundaries.sorted(by: { $0.key < $1.key }), id: \.key) { episode, day in
+                    let sortedBoundaries = episodeBoundaries.sorted(by: { $0.key < $1.key })
+                    let labelStride = max(1, sortedBoundaries.count / 10)
+                    ForEach(sortedBoundaries, id: \.key) { episode, day in
                         RuleMark(x: .value("Day", day))
-                            .foregroundStyle(.gray.opacity(0.5))
+                            .foregroundStyle(.gray.opacity(0.4))
                             .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
                             .annotation(position: .top, alignment: .leading) {
-                                Text("Ep \(episode)")
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(.secondary)
+                                if episode % labelStride == 0 || episode == sortedBoundaries.last?.key {
+                                    Text("Ep \(episode)")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                     }
                 }
@@ -201,49 +211,67 @@ private struct MetricLineChart: View {
     var textReferences: [(label: String, value: Double, color: Color)] = []
 
     @State private var selectedStep: Int?
+    @State private var forceGlobalScale = false
 
     private static let maxRenderPoints = 1000
 
     private struct Point: Identifiable {
-        let id: Int
+        let id: Int      // downsampled index
+        let step: Int    // original training step number
         let value: Double
     }
 
-    private func downsample(_ source: [Double]) -> [Double] {
-        guard source.count > Self.maxRenderPoints else { return source }
+    private func downsampleCore(_ source: [Double]) -> [(step: Int, value: Double)] {
+        if source.count <= Self.maxRenderPoints {
+            return source.enumerated().map { (step: $0.offset, value: $0.element) }
+        }
         let factor = (source.count + Self.maxRenderPoints - 1) / Self.maxRenderPoints
         return stride(from: 0, to: source.count, by: factor).map { start in
             let end = min(start + factor, source.count)
-            return source[start..<end].reduce(0, +) / Double(end - start)
+            return (step: start + (end - start) / 2,
+                    value: source[start..<end].reduce(0, +) / Double(end - start))
         }
     }
 
-    private var points: [Point] {
-        downsample(data).enumerated().map { Point(id: $0.offset, value: $0.element) }
+    private func downsamplePoints(_ source: [Double]) -> [Point] {
+        downsampleCore(source).enumerated().map { Point(id: $0.offset, step: $0.element.step, value: $0.element.value) }
     }
 
-    private var downsampledCompanion: ([Double], String, Color)? {
-        guard let (cData, cLabel, cColor) = companion else { return nil }
-        return (downsample(cData), cLabel, cColor)
+    private func downsampleValues(_ source: [Double]) -> [(step: Int, value: Double)] {
+        downsampleCore(source)
+    }
+
+    // Computed once per body evaluation via computeSlice().
+    private func computeSlice() -> (data: [Double], domain: ClosedRange<Double>?) {
+        guard !forceGlobalScale, data.count > 50 else { return (data, nil) }
+        let recentCount = max(50, data.count / 5)
+        let recent = data.suffix(recentCount)
+        guard let recentMin = recent.min(), let recentMax = recent.max(),
+              let globalMax = data.max(), let globalMin = data.min() else { return (data, nil) }
+        let recentRange = recentMax - recentMin
+        let globalRange = globalMax - globalMin
+        guard globalRange > 0, recentRange / globalRange < 0.15 else { return (data, nil) }
+        let pad = max(recentRange * 0.15, globalRange * 0.005)
+        return (Array(recent), (recentMin - pad)...(recentMax + pad))
     }
 
     @ViewBuilder
-    private var lineChart: some View {
+    private func lineChart(points: [Point], companionData: ([(step: Int, value: Double)], String, Color)?) -> some View {
         let base = Chart {
             ForEach(points) { point in
                 LineMark(
-                    x: .value(xLabel, point.id),
+                    x: .value(xLabel, point.step),
                     y: .value("Value", point.value),
                     series: .value("Series", label)
                 )
                 .foregroundStyle(by: .value("Series", label))
                 .interpolationMethod(.catmullRom)
             }
-            if companionAsLine, let (cData, cLabel, _) = downsampledCompanion {
-                ForEach(Array(cData.enumerated()), id: \.offset) { i, val in
+            if companionAsLine, let (cData, cLabel, _) = companionData {
+                ForEach(Array(cData.enumerated()), id: \.offset) { i, sv in
                     LineMark(
-                        x: .value(xLabel, i),
-                        y: .value("Value", val),
+                        x: .value(xLabel, sv.step),
+                        y: .value("Value", sv.value),
                         series: .value("Series", cLabel)
                     )
                     .foregroundStyle(by: .value("Series", cLabel))
@@ -265,7 +293,7 @@ private struct MetricLineChart: View {
                     }
             }
         }
-        if companionAsLine, let (_, cLabel, cColor) = downsampledCompanion {
+        if companionAsLine, let (_, cLabel, cColor) = companionData {
             base.chartForegroundStyleScale(domain: [label, cLabel], range: [color, cColor])
         } else {
             base.chartForegroundStyleScale(domain: [label], range: [color])
@@ -273,30 +301,50 @@ private struct MetricLineChart: View {
     }
 
     var body: some View {
-        if points.isEmpty {
+        if data.isEmpty {
             VStack {
                 Spacer()
                 ContentUnavailableView("No data yet", systemImage: "chart.line.uptrend.xyaxis")
                 Spacer()
             }
         } else {
+            let slice = computeSlice()
+            let pts = downsamplePoints(slice.data)
+            let compData: ([(step: Int, value: Double)], String, Color)? = companion.map { (cData, cLabel, cColor) in
+                let cSlice = slice.domain != nil ? Array(cData.suffix(max(50, cData.count / 5))) : cData
+                return (downsampleValues(cSlice), cLabel, cColor)
+            }
             VStack(spacing: 4) {
-                lineChart
+                lineChart(points: pts, companionData: compData)
                     .chartXAxisLabel(xLabel)
                     .chartYAxisLabel(label)
                     .chartXSelection(value: $selectedStep)
+                    .if(slice.domain != nil) { $0.chartYScale(domain: slice.domain!) }
+                    .overlay(alignment: Alignment.topLeading) {
+                        if slice.domain != nil {
+                            Button(forceGlobalScale ? "Auto" : "Global") {
+                                forceGlobalScale.toggle()
+                            }
+                            .font(.system(size: 10))
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(.ultraThinMaterial)
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                            .padding(4)
+                        }
+                    }
 
                 // Fixed-height tooltip zone — no layout shift
                 HStack(spacing: 16) {
-                    if let step = selectedStep, step < points.count {
+                    if let step = selectedStep,
+                       let nearest = pts.min(by: { abs($0.step - step) < abs($1.step - step) }) {
                         let store = QLearningStore.shared
-                        if step < store.batchDays.count {
-                            Text("Day \(store.batchDays[step])").foregroundStyle(.secondary)
+                        if nearest.step < store.batchDays.count {
+                            Text("Day \(store.batchDays[nearest.step])").foregroundStyle(.secondary)
                         }
-                        Text("Step \(step)").foregroundStyle(.secondary)
-                        Text("\(label): \(String(format: yFormat, points[step].value))").foregroundStyle(color)
-                        if let (cData, cLabel, cColor) = companion, step < cData.count {
-                            Text("\(cLabel): \(String(format: "%.3f", cData[step]))").foregroundStyle(cColor)
+                        Text("Step \(nearest.step)").foregroundStyle(.secondary)
+                        Text("\(label): \(String(format: yFormat, nearest.value))").foregroundStyle(color)
+                        if let (cData, cLabel, cColor) = companion, nearest.step < cData.count {
+                            Text("\(cLabel): \(String(format: "%.3f", cData[nearest.step]))").foregroundStyle(cColor)
                         }
                     } else {
                         Text(" ")

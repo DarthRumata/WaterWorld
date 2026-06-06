@@ -19,32 +19,40 @@ private struct IndexedExperience: Identifiable {
     var brainPrefix: String { String(experience.brainId.uuidString.prefix(8).lowercased()) }
 }
 
+private let pageSize = 5000
+
 struct QLearningReportView: View {
     private let store = QLearningStore.shared
     @State private var sortOrder: [KeyPathComparator<IndexedExperience>] = []
+    @State private var cachedRows: [IndexedExperience] = []
+    @State private var displayedCount = pageSize
+    @State private var isSorting = false
 
-    private var rows: [IndexedExperience] {
-        store.steps.enumerated().map { IndexedExperience(index: $0.offset, experience: $0.element) }
-    }
-
-    private var sortedRows: [IndexedExperience] {
-        rows.sorted(using: sortOrder)
-    }
+    private var hasOlder: Bool { displayedCount < store.steps.count }
 
     var body: some View {
         VStack(alignment: .leading) {
             HStack {
                 Text("Q-Learning Report").font(.title2).bold()
                 Spacer()
+                if isSorting { ProgressView().scaleEffect(0.7) }
+                Text("Showing \(cachedRows.count) of \(store.steps.count)")
+                    .font(.caption).foregroundStyle(.secondary)
+                if hasOlder {
+                    Button("↓ Load \(pageSize) older") {
+                        displayedCount = min(displayedCount + pageSize, store.steps.count)
+                    }
+                    .font(.caption)
+                }
                 Button("Copy") { copyToClipboard() }
                 Button("Clear") { store.clear() }
             }
             .padding(.bottom, 8)
 
-            Table(sortedRows, sortOrder: $sortOrder) {
+            Table(cachedRows, sortOrder: $sortOrder) {
                 TableColumn("#", value: \.index) { item in
                     Text(String(item.index))
-                }.width(ideal: 40)
+                }.width(ideal: 55)
                 TableColumn("Brain", value: \.brainPrefix) { item in
                     Text(item.brainPrefix)
                         .foregroundStyle(.secondary)
@@ -67,6 +75,29 @@ struct QLearningReportView: View {
             .frame(minHeight: 300)
         }
         .padding(12)
+        .task(id: store.steps.count) { await rebuildRows() }
+        .task(id: displayedCount) { await rebuildRows() }
+        .onChange(of: sortOrder) { _, _ in Task { await rebuildRows() } }
+    }
+
+    @MainActor
+    private func rebuildRows() async {
+        isSorting = true
+        let steps = store.steps
+        let count = displayedCount
+        let order = sortOrder
+        let rows = await Task.detached(priority: .userInitiated) {
+            // Take the last `count` entries, reverse so newest is first
+            let slice = steps.suffix(count)
+            let offset = steps.count - slice.count
+            var built = slice.enumerated().map { i, exp in
+                IndexedExperience(index: offset + i, experience: exp)
+            }.reversed() as [IndexedExperience]
+            if !order.isEmpty { built.sort(using: order) }
+            return built
+        }.value
+        cachedRows = rows
+        isSorting = false
     }
 
     private func copyToClipboard() {

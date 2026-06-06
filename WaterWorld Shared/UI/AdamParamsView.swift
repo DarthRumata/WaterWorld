@@ -56,6 +56,8 @@ struct AdamParamsView: View {
             .disabled(!hud.isAdamEnabled)
         }
         .padding()
+        .background(Color(NSColor.controlBackgroundColor))
+        .colorScheme(.light)
         .font(.system(size: 12, design: .monospaced))
         .foregroundStyle(.primary)
         .frame(width: 300)

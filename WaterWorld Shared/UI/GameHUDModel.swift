@@ -34,10 +34,11 @@ final class GameHUDModel {
     var adamBeta2: Double = HyperparamSpecs.adamBeta2.defaultValue
     var adamEps: Double = HyperparamSpecs.adamEps.defaultValue
     // MARK: - Simulation params
-    var dodgeEnergyRequired: Double = GlobalConstants.predationDodgeEnergyRequired
     var dodgeCost: Double = GlobalConstants.predationDodgeCost
     // MARK: - Reward params
     var deathPenalty: Double = 0.0
+    var isStateRewardEnabled: Bool = true
+    var isDeltaRewardEnabled: Bool = true
     var nStep: Int = Int(HyperparamSpecs.nStep.defaultValue)
 
     // MARK: - Actions
@@ -54,8 +55,11 @@ final class GameHUDModel {
     var onSetLearningRate: (Double) -> Void = { _ in }
     var onSetEpsilon: (Double) -> Void = { _ in }
     var onSetEpsilonDecay: (Double) -> Void = { _ in }
-    var onSetDodgeEnergyRequired: (Double) -> Void = { _ in }
     var onSetDodgeCost: (Double) -> Void = { _ in }
+    var onToggleStateReward: (Bool) -> Void = { _ in }
+    var onToggleDeltaReward: (Bool) -> Void = { _ in }
+    var networkArchitecture: [Int] = QLearner.defaultHiddenLayers
+    var onApplyArchitecture: ([Int]) -> Void = { _ in }
     var onToggleAdam: (Bool) -> Void = { _ in }
     var onSetAdamBeta1: (Double) -> Void = { _ in }
     var onSetAdamBeta2: (Double) -> Void = { _ in }

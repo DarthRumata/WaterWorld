@@ -23,22 +23,31 @@ enum GlobalConstants {
     // Predation
     static let predationDodgeMaxDepthFraction: Double = 0.30 // Predators only reach top 30% of depth
     static let predationDodgeChance: Double = 0.5            // Probability of getting a dodge roll vs instant death
-    nonisolated(unsafe) static var predationDodgeEnergyRequired: Double = 100.0  // Minimum energy needed to execute a dodge
-    nonisolated(unsafe) static var predationDodgeCost: Double = 90.0             // Energy spent on a successful dodge
-    // Alias used by reward shaping — computed so it tracks predationDodgeEnergyRequired
-    static var predationDeathThreshold: Double { predationDodgeEnergyRequired }
+    static let predationDodgeEnergyRequired: Double = 100.0                      // Minimum energy needed to execute a dodge
+    nonisolated(unsafe) static var predationDodgeCost: Double = 90.0             // Min dodge cost (at boundary depth 0.3)
+    static let predationDodgeCostMax: Double = 180.0                             // Max dodge cost (at surface, depth 0)
+    static let predationDodgeSafetyBuffer: Double = 10.0                         // Extra energy required above dodge cost to attempt a dodge
 
-    // Movement — fraction of container height per tick, so 25 ticks always = full traversal
+    static func dodgeCost(atDepth depth: Double) -> Double {
+        let cutoff = maxDepth * predationDodgeMaxDepthFraction
+        let t = (cutoff - min(depth, cutoff)) / cutoff   // 1.0 at surface, 0.0 at boundary
+        return predationDodgeCost + t * (predationDodgeCostMax - predationDodgeCost)
+    }
+
+// Movement — fraction of container height per tick, so 25 ticks always = full traversal
     static let movementPaceFraction: CGFloat = 1.0 / 25
 
     // Auto-save
     static let autoSaveLifespanThreshold: Int = 100
 
-    // Reward shaping — computed so they stay in sync when predation params change at runtime
+    // Reward shaping
     static let rewardTickSurvivalBonus: Double = 0.02
-    static var rewardCriticalEnergyThreshold: Double { predationDeathThreshold }
-    static var rewardWarningEnergyThreshold: Double  { predationDeathThreshold + predationDodgeCost }
+    /// Energy needed to survive one full night waiting (half day, moderate movement).
+    /// Reward is neutral at this level, negative below, positive above.
+    static var rewardCriticalEnergyThreshold: Double {
+        let nightTicks = dayDuration * 0.5 / gameTickDuration   // ticks per night at speed=1
+        return nightTicks * (idleEnergyLoss + movementEnergyLoss * 0.5) // ~60
+    }
     static var rewardEnergyDeltaScale: Double        { predationDodgeCost }
     static var rewardEnergyLossPenaltyScale: Double  { predationDodgeCost * 3 }
-    static var rewardWarningPenaltyScale: Double     { predationDodgeCost * 10 }
 }

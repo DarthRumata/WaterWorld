@@ -104,10 +104,12 @@ class GameScene: SKScene {
             networkUpdateHandler: { [weak self] epsilon in
                 guard let self else { return }
                 let dp = await self.qLearner.deathPenalty
+                let lr = await self.qLearner.learningRate
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     hudModel.epsilon = simulationMode == .normal ? 0.0 : epsilon
                     hudModel.deathPenalty = dp
+                    hudModel.learningRate = lr
                 }
             },
             sustainedWarningHandler: { [weak self] _ in
@@ -250,9 +252,23 @@ class GameScene: SKScene {
             Task { await self.qLearner.setEpsilonDecay(value) }
             self.hudModel.epsilonDecay = value
         }
-        hudModel.onSetDodgeEnergyRequired = { [weak self] value in
-            GlobalConstants.predationDodgeEnergyRequired = max(0, value)
-            self?.hudModel.dodgeEnergyRequired = GlobalConstants.predationDodgeEnergyRequired
+        hudModel.onApplyArchitecture = { [weak self] layers in
+            guard let self else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.qLearner.applyArchitecture(layers)
+                self.hudModel.networkArchitecture = layers
+            }
+        }
+        hudModel.onToggleStateReward = { [weak self] enabled in
+            guard let self else { return }
+            Task { await self.qLearner.setStateRewardEnabled(enabled) }
+            self.hudModel.isStateRewardEnabled = enabled
+        }
+        hudModel.onToggleDeltaReward = { [weak self] enabled in
+            guard let self else { return }
+            Task { await self.qLearner.setDeltaRewardEnabled(enabled) }
+            self.hudModel.isDeltaRewardEnabled = enabled
         }
         hudModel.onSetDodgeCost = { [weak self] value in
             GlobalConstants.predationDodgeCost = max(0, value)
@@ -344,11 +360,14 @@ class GameScene: SKScene {
             let logger: Logger = i == 0 ? ConsoleLogger() : EmptyLogger()
             let tracker = OrganismTracker(logger: logger)
 
+            // depth = 0 at top (surface), maxDepth at bottom. y=0 is bottom in SpriteKit.
+            let initialDepth = (1.0 - Double(yPosition) / Double(container.size.height)) * GlobalConstants.maxDepth
             let model = OrganismModel(
                 brain: brainFactory(),
                 name: nameGenerator.generateName() ?? "\(i)",
                 logger: logger,
-                tracker: tracker
+                tracker: tracker,
+                initialDepth: max(0, min(GlobalConstants.maxDepth, initialDepth))
             ) { @MainActor [weak self] (model: OrganismModel, cause: CauseOfDeath) in
                 guard let self else { return }
                 let id = model.id
@@ -497,10 +516,9 @@ class GameScene: SKScene {
     @MainActor
     private func runTickPass(nightJustStarted: Bool = false) async {
         // Snapshot stable (model, view, depth) triples up front
-        let snapshot: [(model: OrganismModel, view: Organism, depth: CGFloat)] = organismModels.compactMap { (id, model) in
+        let snapshot: [(model: OrganismModel, view: Organism)] = organismModels.compactMap { (id, model) in
             guard let view = organisms[id] else { return nil }
-            let depth = normalizedDepth(for: view)
-            return (model, view, depth)
+            return (model, view)
         }
 
         if nightJustStarted && !snapshot.isEmpty {
@@ -513,15 +531,17 @@ class GameScene: SKScene {
         var predationSnapshot: [(id: UUID, depth: CGFloat, energy: Double)] = []
         predationSnapshot.reserveCapacity(snapshot.count)
         for entry in snapshot {
-            predationSnapshot.append((entry.view.id, entry.depth, await entry.model.energy))
+            // Use logicalDepth (updated instantly on action) not the animated sprite position
+            let logicalDepth = await entry.model.logicalDepth
+            predationSnapshot.append((entry.view.id, CGFloat(logicalDepth), await entry.model.energy))
         }
         let events = await predationManager.processDueAttacks(pairs: predationSnapshot)
 
         // Apply events
         for event in events {
             switch event {
-            case let .damage(id, amount):
-                await organismModels[id]?.applyDamage(amount)
+            case let .dodge(id, cost):
+                await organismModels[id]?.applyDamage(cost)
             case let .kill(id, _):
                 await organismModels[id]?.kill()
             }
@@ -530,11 +550,12 @@ class GameScene: SKScene {
         // Phase 1 — pre-compute per-organism inputs on MainActor, then run inference in parallel
         struct TickEntry: Sendable { let model: OrganismModel; let lightLevel: Double; let depth: Double }
         var entries: [TickEntry] = []
-        for (model, view, depth) in snapshot {
+        for (model, view) in snapshot {
             if Task.isCancelled { break }
             guard organismModels[model.id] != nil else { continue }
             view.speed = simulationSpeed
-            entries.append(TickEntry(model: model, lightLevel: lightLevel(atDepth: depth), depth: Double(depth)))
+            let ld = await model.logicalDepth
+            entries.append(TickEntry(model: model, lightLevel: lightLevel(atDepth: CGFloat(ld)), depth: ld))
         }
         let dp = dayProgress
 
@@ -629,6 +650,8 @@ class GameScene: SKScene {
             existing.makeKeyAndOrderFront(nil)
             return
         }
+        metricsWindow?.close()
+        metricsWindow = nil
         let hosting = NSHostingController(rootView: DiagnosticsView())
         let window = NSWindow(contentViewController: hosting)
         window.title = "Reward Diagnostics"
@@ -654,17 +677,18 @@ class GameScene: SKScene {
     private func presentMetricsChart(tab: MetricTab) {
         if let existing = metricsWindow {
             existing.makeKeyAndOrderFront(nil)
-            // Switch tab in existing window
             if let hosting = existing.contentViewController as? NSHostingController<MetricsChartView> {
                 hosting.rootView.selectedTab = tab
             }
             return
         }
+        diagnosticsWindow?.close()
+        diagnosticsWindow = nil
         let view = MetricsChartView(selectedTab: tab)
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
         window.title = "Metrics"
-        window.setContentSize(NSSize(width: 700, height: 450))
+        window.setContentSize(NSSize(width: 920, height: 450))
         window.makeKeyAndOrderFront(nil)
         metricsWindow = window
     }

@@ -55,7 +55,7 @@ struct GameHUDView: View {
             let store = QLearningStore.shared
             metricText("Deaths", tab: .mortality)
             metricText(String(format: "Rwd: %.2f  Q: %.2f", store.lastAvgReward, store.lastAvgMaxQ), tab: .reward)
-            metricText(String(format: "Loss: %.4f", store.lastLoss), tab: .loss)
+            metricText(String(format: "Loss: %.1f%%", store.lastRelativeLoss), tab: .relativeLoss)
         }
         .frame(width: 140, alignment: .leading)
     }

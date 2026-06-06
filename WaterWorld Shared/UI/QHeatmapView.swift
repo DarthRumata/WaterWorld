@@ -67,10 +67,10 @@ struct QHeatmapView: View {
             if cells.isEmpty {
                 Spacer()
                 if store.currentNetwork == nil {
-                    ContentUnavailableView("Нет данных", systemImage: "network",
-                        description: Text("Дождитесь первого шага обучения"))
+                    ContentUnavailableView("No data", systemImage: "network",
+                        description: Text("Waiting for the first training step"))
                 } else {
-                    ProgressView("Генерация карты…")
+                    ProgressView("Generating map…")
                 }
                 Spacer()
             } else {
@@ -130,8 +130,48 @@ struct QHeatmapView: View {
                 }
             }
         }
-        .chartXAxisLabel("Время суток")
-        .chartYAxisLabel("Глубина")
+        .chartXAxisLabel("Time of day")
+        .chartYAxisLabel("Depth")
+        .chartOverlay { proxy in
+            GeometryReader { geo in
+                if let plotFrame = proxy.plotFrame {
+                let origin = geo[plotFrame].origin
+                let h = proxy.plotSize.height
+                let w = proxy.plotSize.width
+
+                // Night band: dusk (0.5) → dawn (1.0)
+                if let sunsetX = proxy.position(forX: 0.5) {
+                    Rectangle()
+                        .fill(Color(white: 0, opacity: 0.28))
+                        .frame(width: w - sunsetX, height: h)
+                        .offset(x: origin.x + sunsetX, y: origin.y)
+                    // Sunset separator
+                    Rectangle()
+                        .fill(Color.orange.opacity(0.75))
+                        .frame(width: 2, height: h)
+                        .offset(x: origin.x + sunsetX - 1, y: origin.y)
+                }
+                // Sunrise separator (left edge = dawn)
+                Rectangle()
+                    .fill(Color.orange.opacity(0.75))
+                    .frame(width: 2, height: h)
+                    .offset(x: origin.x, y: origin.y)
+
+                // Midday icon ☀️ at 0.25
+                if let x = proxy.position(forX: 0.25) {
+                    Text("☀️")
+                        .font(.system(size: 13))
+                        .offset(x: origin.x + x - 8, y: origin.y + 4)
+                }
+                // Midnight icon 🌙 at 0.75
+                if let x = proxy.position(forX: 0.75) {
+                    Text("🌙")
+                        .font(.system(size: 13))
+                        .offset(x: origin.x + x - 8, y: origin.y + 4)
+                }
+                } // end if let plotFrame
+            }
+        }
     }
 
     // MARK: - Legend
@@ -152,9 +192,9 @@ struct QHeatmapView: View {
             }
         case .bestAction:
             HStack(spacing: 12) {
-                legendItem(color: .green, label: "Вверх")
-                legendItem(color: .gray, label: "Ждать")
-                legendItem(color: .blue, label: "Вниз")
+                legendItem(color: .green, label: "Up")
+                legendItem(color: .gray, label: "Wait")
+                legendItem(color: .blue, label: "Down")
             }
             .font(.caption2)
         }
@@ -220,7 +260,7 @@ struct QHeatmapView: View {
         environment: EnvironmentService,
         stepsX: Int, stepsY: Int,
         fixedEnergy: Double
-    ) -> (cells: [HeatmapCell], qMin: Double, qMax: Double) {
+    ) async -> (cells: [HeatmapCell], qMin: Double, qMax: Double) {
         let dx = 1.0 / Double(stepsX)
         let dy = GlobalConstants.maxDepth / Double(stepsY)
         var cells: [HeatmapCell] = []
